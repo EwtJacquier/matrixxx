@@ -41,8 +41,11 @@ import {
   advanceTurn,
   appendLog,
   buildPublicState,
+  bumpTurnTimer,
   endBattle,
+  resumeBattle,
   setDistortion,
+  dropFromInitiative,
   removeTokens,
   setInitiative,
   setLastRoll,
@@ -77,8 +80,10 @@ function authFromHandshake(socket: Socket): SessionUser | null {
 export function registerSocket(io: IOServer): void {
   // Relógio do turno: a cada segundo, se o turno estourou (3 min), pula automático.
   setInterval(async () => {
-    const b = getGame().battle;
-    if (!b || b.initiative.length === 0 || !b.turnEndsAt) return;
+    const g = getGame();
+    const b = g.battle;
+    // Só corre o cronômetro com a batalha ativa (não quando pausada no cenário).
+    if (g.mode !== "battle" || !b || b.initiative.length === 0 || !b.turnEndsAt) return;
     if (Date.now() < b.turnEndsAt) return;
     const entry = b.initiative[b.turnIndex];
     const actor = b.tokens.find((t) => t.id === entry?.tokenId);
@@ -176,11 +181,37 @@ export function registerSocket(io: IOServer): void {
       broadcast();
     });
 
+    socket.on("gm:resumeBattle", async () => {
+      if (!isGM) return fail("Apenas o GM pode resumir a batalha.");
+      await resumeBattle();
+      broadcast();
+    });
+
     socket.on("gm:updateTokens", async ({ tokens }: { tokens: Token[] }) => {
       if (!isGM) return fail("Apenas o GM pode reposicionar tokens.");
       await updateTokens(tokens);
       broadcast();
     });
+
+    // GM edita HP/estado de um token diretamente (pelo inspetor).
+    socket.on(
+      "gm:editToken",
+      async ({ tokenId, hp, state: st }: { tokenId: string; hp?: number; state?: string }) => {
+        if (!isGM) return fail("Apenas o GM pode editar tokens.");
+        const b = getGame().battle;
+        if (!b) return fail("Sem batalha ativa.");
+        const tok = b.tokens.find((t) => t.id === tokenId);
+        if (!tok) return fail("Token inexistente.");
+        if (hp !== undefined && tok.maxHp !== undefined) {
+          tok.hp = Math.max(0, Math.min(tok.maxHp, hp));
+        } else if (hp !== undefined) {
+          tok.hp = Math.max(0, hp);
+        }
+        if (st !== undefined) tok.state = st as Token["state"];
+        await updateTokens(b.tokens);
+        broadcast();
+      },
+    );
 
     socket.on("gm:advanceTurn", async ({ dir }: { dir: 1 | -1 }) => {
       if (!isGM) return fail("Apenas o GM controla os turnos.");
@@ -229,6 +260,20 @@ export function registerSocket(io: IOServer): void {
         broadcast();
       },
     );
+
+    // Feedback visual de planejamento (movimento/alvos) — relê para os demais.
+    // Cada interação do jogador da vez reinicia o cronômetro do turno (30s).
+    socket.on("battle:intent", async (payload: unknown) => {
+      socket.broadcast.emit("battle:intent", payload);
+      const b = getGame().battle;
+      const entry = b?.initiative[b.turnIndex];
+      const actor = b?.tokens.find((t) => t.id === entry?.tokenId);
+      if (actor && canControl(actor)) {
+        await bumpTurnTimer();
+        // Propaga o novo prazo a TODOS (evento leve, sem rebroadcast de estado).
+        io.emit("battle:timer", { turnEndsAt: getGame().battle?.turnEndsAt ?? 0 });
+      }
+    });
 
     socket.on("player:confirmAction", async (action: ConfirmedAction) => {
       const g = getGame();
@@ -420,17 +465,17 @@ export function registerSocket(io: IOServer): void {
         }
       }
 
-      // Tokens mortos e objetos destruídos (HP definido e zerado) somem do mapa.
-      const dead = b.tokens
-        .filter(
-          (t) =>
-            ((t.kind === "enemy" || t.kind === "player") && t.state === "Morto") ||
-            (t.kind === "object" && t.hp !== undefined && t.hp <= 0),
-        )
+      // Unidades mortas viram "corpos": continuam no mapa (ocupando a casa) mas
+      // saem da ordem de iniciativa. Objetos destruídos somem de vez.
+      const deadUnits = b.tokens
+        .filter((t) => (t.kind === "enemy" || t.kind === "player") && t.state === "Morto")
         .map((t) => t.id);
-      for (const id of dead) {
+      const deadObjects = b.tokens
+        .filter((t) => t.kind === "object" && t.hp !== undefined && t.hp <= 0)
+        .map((t) => t.id);
+      for (const id of [...deadUnits, ...deadObjects]) {
         const t = b.tokens.find((x) => x.id === id);
-        if (t) await appendLog(`${t.label} foi derrotado e saiu do mapa.`);
+        if (t) await appendLog(`${t.label} foi derrotado.`);
       }
 
       // Cargas gastas no ataque: consome do ator e sobe a distorção do cenário.
@@ -451,9 +496,9 @@ export function registerSocket(io: IOServer): void {
       await saveGame(g);
       if (damages.length > 0) io.emit("battle:damage", { events: damages });
       io.emit("action:confirmed", action);
-      // Remove mortos e objetos consumidos. O turno NÃO avança: o jogador ainda
-      // pode movimentar (e reverter o movimento) antes de encerrar o turno.
-      await removeTokens([...dead, ...consumed], actor.id);
+      // Objetos consumidos/destruídos somem; mortos só saem da iniciativa.
+      await removeTokens([...deadObjects, ...consumed], actor.id);
+      await dropFromInitiative(deadUnits, actor.id);
       broadcast();
     });
 

@@ -6,7 +6,13 @@ import { PlayerPanel } from "./PlayerPanel";
 import { BattleSetup } from "./BattleSetup";
 import styles from "./ScenarioView.module.css";
 
-export function ScenarioView({ onOpenSheet }: { onOpenSheet?: () => void }) {
+export function ScenarioView({
+  onOpenSheet,
+  battleActive,
+}: {
+  onOpenSheet?: () => void;
+  battleActive?: boolean;
+}) {
   const { state, session, emit } = useGame();
   const [setup, setSetup] = useState(false);
   const isGM = session?.role === "gm";
@@ -71,13 +77,9 @@ export function ScenarioView({ onOpenSheet }: { onOpenSheet?: () => void }) {
               </select>
             </label>
             <button onClick={() => setSetup(true)}>⚔ Ativar batalha</button>
-            <button
-              onClick={() =>
-                emit("dice:request", { formula: "1d100", reason: "Teste (d100)" })
-              }
-            >
-              🎲 d100
-            </button>
+            {battleActive && (
+              <button onClick={() => emit("gm:resumeBattle")}>▶ Resumir batalha</button>
+            )}
           </div>
         )}
       </section>

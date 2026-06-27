@@ -71,7 +71,14 @@ export async function setDistortion(value: number): Promise<void> {
 // --- Batalha ---
 
 /** Duração máxima de um turno antes do pulo automático (ms). */
-export const TURN_DURATION_MS = 3 * 60 * 1000;
+export const TURN_DURATION_MS = 30 * 1000;
+
+/** Reinicia o cronômetro do turno (chamado a cada interação do jogador). */
+export async function bumpTurnTimer(): Promise<void> {
+  await mutate((g) => {
+    if (g.battle) g.battle.turnEndsAt = Date.now() + TURN_DURATION_MS;
+  });
+}
 
 function snapshot(g: GameState): BattleSnapshot {
   const b = g.battle!;
@@ -129,7 +136,7 @@ function regenCurrentActor(b: BattleState): void {
 }
 
 export async function startBattle(grid: number, tokens: Token[]): Promise<void> {
-  const size = Math.max(4, Math.min(7, Math.round(grid)));
+  const size = Math.max(4, Math.min(10, Math.round(grid)));
   // Jogadores e inimigos começam com as cargas cheias do seu nível e munição cheia.
   for (const t of tokens) {
     if (t.kind === "player" || t.kind === "enemy") {
@@ -167,9 +174,16 @@ export async function endBattle(): Promise<void> {
       });
     }
   }
+  // Volta ao cenário mas MANTÉM a batalha (pausada), para poder resumir/revisitar.
   await mutate((g) => {
-    g.battle = null;
     g.mode = "scenario";
+  });
+}
+
+/** Resume a batalha pausada (volta ao modo batalha). */
+export async function resumeBattle(): Promise<void> {
+  await mutate((g) => {
+    if (g.battle) g.mode = "battle";
   });
 }
 
@@ -227,6 +241,23 @@ export async function removeTokens(ids: string[], keepActorId: string): Promise<
     if (!b) return;
     const remove = new Set(ids);
     b.tokens = b.tokens.filter((t) => !remove.has(t.id));
+    b.initiative = b.initiative.filter((i) => !remove.has(i.tokenId));
+    const idx = b.initiative.findIndex((i) => i.tokenId === keepActorId);
+    if (idx >= 0) b.turnIndex = idx;
+    else if (b.turnIndex >= b.initiative.length) b.turnIndex = 0;
+  });
+}
+
+/**
+ * Tira tokens da ordem de iniciativa SEM removê-los do mapa (ex.: mortos viram
+ * "corpos" que continuam ocupando a casa, mas não jogam mais).
+ */
+export async function dropFromInitiative(ids: string[], keepActorId: string): Promise<void> {
+  if (ids.length === 0) return;
+  await mutate((g) => {
+    const b = g.battle;
+    if (!b) return;
+    const remove = new Set(ids);
     b.initiative = b.initiative.filter((i) => !remove.has(i.tokenId));
     const idx = b.initiative.findIndex((i) => i.tokenId === keepActorId);
     if (idx >= 0) b.turnIndex = idx;

@@ -25,7 +25,13 @@ export function PlayerPanel({
   const isMine = session?.id === character.userId;
   const outOfBattle = state.game.mode !== "battle";
   const canUse = isMine && outOfBattle;
+  const isGM = session?.role === "gm";
   const itemCatalog = (id: string) => state.items.find((i) => i.id === id);
+
+  // GM, fora de combate, restaura HP cheio e estado "Disposto" do personagem.
+  function gmRestore() {
+    emit("character:save", { ...character, hp: character.maxHp, state: "Disposto" });
+  }
 
   return (
     <div className={styles.card}>
@@ -50,6 +56,11 @@ export function PlayerPanel({
           {onOpenSheet && (
             <button className={styles.sheetBtn} onClick={onOpenSheet}>
               ver ficha
+            </button>
+          )}
+          {isGM && (
+            <button className={styles.sheetBtn} onClick={gmRestore}>
+              restaurar
             </button>
           )}
         </div>

@@ -182,7 +182,7 @@ export function BattleSetup({ onClose }: { onClose: () => void }) {
           <label>
             Grid
             <select value={grid} onChange={(e) => setGrid(Number(e.target.value))}>
-              {[4, 5, 6, 7].map((n) => (
+              {[4, 5, 6, 7, 8, 9, 10].map((n) => (
                 <option key={n} value={n}>
                   {n} x {n}
                 </option>

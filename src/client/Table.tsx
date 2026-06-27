@@ -34,6 +34,8 @@ export function Table() {
 
   const isGM = session?.role === "gm";
   const inBattle = state.game.mode === "battle";
+  // Há uma batalha guardada (ativa ou pausada) que pode ser resumida/revisitada.
+  const hasBattle = !!state.game.battle;
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -85,7 +87,10 @@ export function Table() {
           (inBattle ? (
             <BattleView />
           ) : (
-            <ScenarioView onOpenSheet={() => setView("sheet")} />
+            <ScenarioView
+              onOpenSheet={() => setView("sheet")}
+              battleActive={hasBattle}
+            />
           ))}
       </main>
     </div>

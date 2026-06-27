@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useGame } from "./GameProvider";
-import type { ActionKind, Token } from "@/game/types";
-import { STATES } from "@/game/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useGame, type DamagePopup } from "./GameProvider";
+import { STATES, type ActionKind, type Token } from "@/game/types";
 import { adjacencyMods, isActionRule, objectBadge, ruleOf } from "@/game/objects";
 import { bandLabel, inBand, weaponBand } from "@/game/weapons";
 import { canTarget } from "@/game/faction";
@@ -26,7 +25,7 @@ function formatRemaining(ms: number): string {
 type Phase = "move" | "action";
 
 export function BattleView() {
-  const { state, session, emit, damagePopups } = useGame();
+  const { state, session, emit, damagePopups, battleIntent, turnEndsAt } = useGame();
   const battle = state?.game.battle ?? null;
   const isGM = session?.role === "gm";
 
@@ -57,6 +56,13 @@ export function BattleView() {
         ? isGM
         : false);
 
+  // Planejamento compartilhado: para quem NÃO controla, espelha o intent recebido.
+  const intentForActor =
+    battleIntent && currentActor && battleIntent.actorId === currentActor.id
+      ? battleIntent
+      : null;
+  const showHighlights = controlsActor || !!intentForActor;
+
   // Fluxo do turno: primeiro mover (e confirmar), depois atacar.
   const [phase, setPhase] = useState<Phase>("move");
   const [stagedPos, setStagedPos] = useState<{ x: number; y: number } | null>(null);
@@ -69,6 +75,33 @@ export function BattleView() {
   const [useItemId, setUseItemId] = useState<string>(""); // consumível escolhido
   const [reloadWeaponId, setReloadWeaponId] = useState<string>(""); // arma a recarregar
   const [inspectId, setInspectId] = useState<string | null>(null);
+  const [rightTab, setRightTab] = useState<"objects" | "log">("objects");
+  const [cursor, setCursor] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  // O que mostrar em cima dos cubos no tabuleiro isométrico.
+  // Menu de comando estilo FFT Tactics + navegação por controle/teclado.
+  type Nav =
+    | "root"
+    | "move"
+    | "act"
+    | "weapon"
+    | "items"
+    | "reload"
+    | "object"
+    | "target"
+    | "inspect"
+    | "confirmAttack"
+    | "confirmEndTurn"
+    | "confirmEndBattle";
+  const [nav, setNav] = useState<Nav>("root");
+  const [menuIndex, setMenuIndex] = useState(0);
+  // Câmera do tabuleiro: zoom (1..1.5) e pan (px, 0 = centralizado).
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  zoomRef.current = zoom;
+  panRef.current = pan;
+  const clampZoom = (z: number) => Math.max(1, Math.min(1.5, z));
 
   // Recomeça o fluxo quando muda o ator/turno.
   useEffect(() => {
@@ -82,17 +115,39 @@ export function BattleView() {
     setReloadWeaponId("");
     setMoveCharges(0);
     setAttackCharges(0);
+    setNav("root");
+    setMenuIndex(0);
+    // Ao iniciar/trocar o turno, reseta o inspetor.
+    setInspectId(null);
+    setCursor(currentActor?.pos ?? { x: 0, y: 0 });
   }, [currentActor?.id, battle?.turnIndex]);
 
-  // Após usar a ação principal, vai direto para a aba de movimento (só falta mover).
+  // nav controla a fase: ações/alvo = "action"; menu raiz/mover = "move".
+  // Também zera o índice do menu ao trocar de tela.
+  useEffect(() => {
+    const actionNav =
+      nav === "act" ||
+      nav === "weapon" ||
+      nav === "items" ||
+      nav === "reload" ||
+      nav === "object" ||
+      nav === "target" ||
+      nav === "confirmAttack";
+    setPhase(actionNav ? "action" : "move");
+    setMenuIndex(0);
+  }, [nav]);
+
+  // Após usar a ação principal, volta ao menu (só falta o movimento, opcional).
   const acted = !!currentActor?.actedThisTurn;
   useEffect(() => {
-    if (acted) setPhase("move");
+    if (acted) setNav("root");
   }, [acted]);
 
   if (!battle || !state) return null;
 
   const grid = battle.grid;
+  // Prazo do turno: o maior entre o estado e o evento leve de reset (battle:timer).
+  const endsAt = Math.max(battle.turnEndsAt ?? 0, turnEndsAt);
   const actorPos = currentActor?.pos ?? { x: 0, y: 0 };
 
   const baseMv = (() => {
@@ -101,8 +156,23 @@ export function BattleView() {
     return ch?.mv ?? 2;
   })();
   const availableCharges = currentActor?.charges ?? 0;
+
+  // Valores "efetivos": locais para quem controla; espelham o intent para os demais.
+  const effStaged = controlsActor ? stagedPos : intentForActor?.staged ?? null;
+  const effMode = controlsActor ? nav : intentForActor?.mode ?? "root";
+  const effMoveCharges = controlsActor ? moveCharges : intentForActor?.moveCharges ?? 0;
+  const effAttackCharges = controlsActor ? attackCharges : intentForActor?.attackCharges ?? 0;
+  const effActionMode =
+    effMode === "act" ||
+    effMode === "weapon" ||
+    effMode === "items" ||
+    effMode === "reload" ||
+    effMode === "object" ||
+    effMode === "target" ||
+    effMode === "confirmAttack";
+
   // Movimento efetivo = base + cargas de distorção alocadas ao movimento.
-  const actorMv = baseMv + moveCharges;
+  const actorMv = baseMv + effMoveCharges;
 
   const actorChar = currentActor?.characterId
     ? state.characters.find((c) => c.id === currentActor.characterId)
@@ -141,7 +211,7 @@ export function BattleView() {
   // Posição "de onde o ator vai agir": a casa encenada (staging local) ou a real.
   // O movimento NÃO é enviado ao servidor até confirmar a ação/encerrar o turno,
   // então mover e agir são independentes e dá para voltar atrás na movimentação.
-  const fromPos = stagedPos ?? actorPos;
+  const fromPos = effStaged ?? actorPos;
 
   // Objetos em campo e os adjacentes ao ator (a partir de fromPos).
   const objectsOnBoard = battle.tokens.filter((t) => t.kind === "object");
@@ -157,16 +227,17 @@ export function BattleView() {
   const actionObject = adjActionObjects.find((o) => o.id === actionObjectId) ?? null;
   const actionObjectRule = actionObject ? ruleOf(actionObject) : null;
 
-  // Casas alcançáveis no passo de movimento: BFS contornando tokens não aliados.
+  // Casas alcançáveis no passo de movimento (BFS). Visível a TODOS quando o ator
+  // está planejando o movimento (controlador local ou intent compartilhado).
+  const movePlanning = showHighlights && !effActionMode && effMode !== "inspect";
   const reachableSet =
-    phase === "move" && controlsActor && currentActor
+    movePlanning && currentActor
       ? reachableCells(currentActor, battle.tokens, grid, actorMv)
       : null;
   const reachable = (x: number, y: number) =>
     !!reachableSet &&
-    // A casa de origem do ator também é "alcançável" (clicar = voltar/ficar parado).
     (reachableSet.has(`${x},${y}`) ||
-      (!!currentActor && phase === "move" && actorPos.x === x && actorPos.y === y));
+      (!!currentActor && actorPos.x === x && actorPos.y === y));
 
   // Alvos no passo de ação — NUNCA objetos, apenas jogadores/inimigos.
   // Só a ação de objeto que causa dano (chute) precisa de alvo.
@@ -200,11 +271,34 @@ export function BattleView() {
     ? targetId
     : targets[0]?.id ?? "";
 
+  // Tokens que o ator pode mirar (inimigos/objetos com HP) a partir de fromPos.
+  const targetable =
+    currentActor
+      ? battle.tokens.filter((t) => t.id !== currentActor.id && canTarget(currentActor, t))
+      : [];
+  const weaponById = (id: string) => state.items.find((i) => i.id === id) ?? null;
+  // Alvos de uma arma específica (dentro da banda).
+  const weaponTargets = (w: typeof myWeapons[number] | null) => {
+    const band = weaponBand(w);
+    return targetable.filter((t) => inBand(manhattan(fromPos, t.pos), band));
+  };
+  // Opções de arma que TÊM ao menos um alvo (mãos livres + armas em posse).
+  const weaponOptions: { id: string; weapon: typeof myWeapons[number] | null }[] = [
+    { id: "", weapon: null },
+    ...myWeapons
+      .filter((w) => !(w.maxAmmo && (currentActor?.ammo?.[w.id] ?? 0) <= 0))
+      .map((w) => ({ id: w.id, weapon: w })),
+  ].filter((o) => weaponTargets(o.weapon).length > 0);
+  const canAttack = weaponOptions.length > 0;
+
   // Guia de movimentação: alvos atingíveis por QUALQUER arma (banda) a partir de fromPos.
-  // Inclui mãos livres (1) e todas as armas em posse.
-  const myBands = [weaponBand(null), ...myWeapons.map((w) => weaponBand(w))];
+  // Armas sem munição não marcam alvo (são inúteis até recarregar). Mãos livres sempre.
+  const usableWeapons = myWeapons.filter(
+    (w) => !w.maxAmmo || (currentActor?.ammo?.[w.id] ?? 0) > 0,
+  );
+  const myBands = [weaponBand(null), ...usableWeapons.map((w) => weaponBand(w))];
   const moveGuideTargetIds =
-    phase === "move" && controlsActor && currentActor
+    movePlanning && currentActor
       ? new Set(
           battle.tokens
             .filter((t) => {
@@ -216,10 +310,27 @@ export function BattleView() {
         )
       : new Set<string>();
 
-  // Posição de exibição: para quem controla, o ator aparece na casa encenada
-  // (local) em ambas as fases; os demais só veem após o commit (confirmar ação).
+  // Arma/alvo efetivos (controlador: ao vivo; demais: do intent).
+  const effWeaponId = controlsActor
+    ? effMode === "weapon"
+      ? weaponOptions[menuIndex]?.id ?? ""
+      : effectiveWeaponId
+    : intentForActor?.weaponId ?? "";
+  const effTargetId = controlsActor ? effectiveTargetId : intentForActor?.targetId ?? "";
+
+  // Alvos destacados no grid (visível a todos): prévia da arma (weapon) ou alvo (target).
+  const highlightTargetIds = !showHighlights
+    ? new Set<string>()
+    : effMode === "weapon"
+      ? new Set(weaponTargets(weaponById(effWeaponId)).map((t) => t.id))
+      : (effMode === "target" || effMode === "confirmAttack") && effTargetId
+        ? new Set([effTargetId])
+        : new Set<string>();
+
+  // Posição de exibição: o ator aparece na casa encenada para TODOS durante o
+  // planejamento (controlador local ou intent compartilhado).
   const displayPos = (t: Token) =>
-    controlsActor && stagedPos && t.id === currentActor?.id ? stagedPos : t.pos;
+    effStaged && t.id === currentActor?.id ? effStaged : t.pos;
 
   const tokenAt = (x: number, y: number) =>
     battle.tokens.find((t) => {
@@ -228,6 +339,14 @@ export function BattleView() {
     });
 
   const inspected = inspectId ? battle.tokens.find((t) => t.id === inspectId) ?? null : null;
+  // Inspetor: no modo inspecionar segue o cursor; ao mirar, mostra o alvo;
+  // senão o token clicado, ou o ator do turno atual.
+  const inspectShown =
+    nav === "inspect"
+      ? battle.tokens.find((t) => t.pos.x === cursor.x && t.pos.y === cursor.y) ?? null
+      : nav === "target" || nav === "confirmAttack"
+        ? battle.tokens.find((t) => t.id === effectiveTargetId) ?? inspected ?? currentActor
+        : inspected ?? currentActor;
 
   function clickCell(x: number, y: number) {
     if (phase !== "move" || !controlsActor) return;
@@ -306,26 +425,459 @@ export function BattleView() {
     if (hasMoved) endTurn();
   }
 
+  // --- Menu de comando estilo FFT (árvore navegável) ---
+  type MenuItem = { key: string; label: string; meta?: string; disabled?: boolean; run: () => void };
+  const goTarget = () => {
+    setMenuIndex(0);
+    setNav("target");
+  };
+  const backItem = (run: () => void): MenuItem => ({ key: "__back", label: "◀ Voltar", run });
+  // "Agir" só fica disponível se houver ataque, item ou ação especial.
+  const canAct = canAttack || myConsumables.length > 0 || adjActionObjects.length > 0;
+
+  function buildMenu(): { title: string; note?: string; items: MenuItem[]; back?: () => void } {
+    switch (nav) {
+      case "act": {
+        const back = () => setNav("root");
+        return {
+          title: "Agir",
+          back,
+          items: [
+            { key: "attack", label: "Atacar", disabled: !canAttack, run: () => { setActionKind("attack"); setMenuIndex(0); setNav("weapon"); } },
+            { key: "item", label: "Usar item", disabled: myConsumables.length === 0, run: () => { setActionKind("useItem"); setMenuIndex(0); setNav("items"); } },
+            ...(adjActionObjects.length
+              ? [{ key: "special", label: "Ação especial", run: () => { setActionKind("special"); setMenuIndex(0); setNav("object"); } }]
+              : []),
+            backItem(back),
+          ],
+        };
+      }
+      case "weapon": {
+        const back = () => setNav("act");
+        return {
+          title: "Arma",
+          back,
+          items: [
+            ...weaponOptions.map((o) => {
+              const w = o.weapon;
+              const ammoLeft = w?.maxAmmo ? currentActor!.ammo?.[w.id] ?? 0 : null;
+              return {
+                key: o.id || "maos",
+                label: w ? w.name : "Mãos Livres",
+                meta: w
+                  ? `${w.damage} · alc ${bandLabel(weaponBand(w))}${w.area ? ` · área ${w.area}` : ""}${ammoLeft !== null ? ` · ⦿${ammoLeft}/${w.maxAmmo}` : ""}`
+                  : "1d4 · alc 1",
+                run: () => { setWeaponId(o.id); setTargetId(""); goTarget(); },
+              };
+            }),
+            backItem(back),
+          ],
+        };
+      }
+      case "items": {
+        const back = () => setNav("act");
+        return {
+          title: "Itens",
+          back,
+          items: [
+            ...myConsumables.map(({ item, qty }) => ({
+              key: item.id,
+              label: `${item.name} ×${qty}`,
+              meta: item.heal ? `cura +${item.heal}` : item.ammo ? `munição +${item.ammo}` : "",
+              run: () => { setUseItemId(item.id); if (item.ammo) { setMenuIndex(0); setNav("reload"); } else confirmAction(); },
+            })),
+            backItem(back),
+          ],
+        };
+      }
+      case "reload": {
+        const back = () => setNav(actionKind === "special" ? "object" : "items");
+        return {
+          title: "Recarregar",
+          back,
+          items: [
+            ...myWeapons.filter((w) => w.maxAmmo).map((w) => ({
+              key: w.id,
+              label: w.name,
+              meta: `⦿${currentActor!.ammo?.[w.id] ?? 0}/${w.maxAmmo}`,
+              run: () => { setReloadWeaponId(w.id); confirmAction(); },
+            })),
+            backItem(back),
+          ],
+        };
+      }
+      case "object": {
+        const back = () => setNav("act");
+        return {
+          title: "Objeto",
+          back,
+          items: [
+            ...adjActionObjects.map((o) => {
+              const k = ruleOf(o)?.kind;
+              return {
+                key: o.id,
+                label: o.label,
+                meta: ruleOf(o)?.badge,
+                run: () => {
+                  setActionObjectId(o.id);
+                  if (k === "reload") { setMenuIndex(0); setNav("reload"); }
+                  else if (k === "chest") confirmAction();
+                  else { setTargetId(""); goTarget(); }
+                },
+              };
+            }),
+            backItem(back),
+          ],
+        };
+      }
+      case "target": {
+        // Voltar: para ataque, se só havia 1 arma (auto-skip) volta direto ao "Agir".
+        const back = () =>
+          setNav(
+            actionKind === "special"
+              ? "object"
+              : weaponOptions.length > 1
+                ? "weapon"
+                : "act",
+          );
+        // Detalhes completos da arma/ação usada, exibidos no menu de alvo.
+        let note = "";
+        if (actionKind === "attack") {
+          const w = weaponById(effectiveWeaponId);
+          if (w) {
+            const parts = [
+              `dano ${w.damage ?? "—"}`,
+              `alcance ${bandLabel(weaponBand(w))}`,
+            ];
+            if (w.area) parts.push(`área ${w.area}`);
+            if (w.maxAmmo) parts.push(`munição ⦿${currentActor!.ammo?.[w.id] ?? 0}/${w.maxAmmo}`);
+            note = `${w.name} — ${parts.join(" · ")}`;
+          } else {
+            note = "Mãos Livres — dano 1d4 · alcance 1";
+          }
+        } else if (actionKind === "special" && actionObject) {
+          const rl = ruleOf(actionObject);
+          note = `${actionObject.label}${rl?.damage ? ` — dano ${rl.damage}` : ""}`;
+        }
+        return {
+          title: "Alvo",
+          note,
+          back,
+          items: [
+            ...(targets.length
+              ? targets.map((t) => ({
+                  key: t.id,
+                  label: t.label,
+                  meta: `${t.hp}/${t.maxHp} HP${t.kind === "object" ? " · objeto" : ` · ${t.state}`}`,
+                  run: () => { setTargetId(t.id); setMenuIndex(0); setNav("confirmAttack"); },
+                }))
+              : [{ key: "none", label: "(sem alvo)", disabled: true, run: () => {} }]),
+            backItem(back),
+          ],
+        };
+      }
+      case "confirmAttack": {
+        const tgt = battle!.tokens.find((t) => t.id === effectiveTargetId);
+        return {
+          title: "Confirmar ataque",
+          note: tgt
+            ? `${tgt.label} (${tgt.hp}/${tgt.maxHp} HP)${attackCharges ? ` · +${attackCharges * DISTORTION_DMG_PER_CHARGE} dano` : ""}`
+            : undefined,
+          back: () => setNav("target"),
+          items: [
+            { key: "yes", label: "Sim, atacar", run: () => confirmAction() },
+            { key: "no", label: "Não", run: () => setNav("target") },
+          ],
+        };
+      }
+      case "confirmEndTurn":
+        return {
+          title: "Encerrar turno?",
+          back: () => setNav("root"),
+          items: [
+            { key: "yes", label: "Sim, encerrar", run: () => endTurn() },
+            { key: "no", label: "Não", run: () => setNav("root") },
+          ],
+        };
+      case "confirmEndBattle":
+        return {
+          title: "Encerrar combate?",
+          note: "A batalha fica pausada e pode ser resumida.",
+          back: () => setNav("root"),
+          items: [
+            { key: "yes", label: "Sim, encerrar", run: () => emit("gm:endBattle") },
+            { key: "no", label: "Não", run: () => setNav("root") },
+          ],
+        };
+      case "root":
+      default:
+        return {
+          title: "Turno",
+          items: [
+            { key: "move", label: "Mover", run: () => { setMenuIndex(0); setNav("move"); } },
+            { key: "act", label: "Agir", disabled: acted || !canAct, run: () => { setMenuIndex(0); setNav("act"); } },
+            { key: "inspect", label: "Inspecionar", run: () => { setCursor(stagedPos ?? actorPos); setNav("inspect"); } },
+            { key: "end", label: "Encerrar", run: () => { setMenuIndex(0); setNav("confirmEndTurn"); } },
+            ...(isGM
+              ? [{ key: "endbattle", label: "Encerrar combate (pausa)", run: () => { setMenuIndex(0); setNav("confirmEndBattle"); } }]
+              : []),
+          ],
+        };
+    }
+  }
+  const menu = buildMenu();
+
+  // Auto-skip: se só há UMA arma com alvo, pula direto para a seleção de alvo.
+  useEffect(() => {
+    if (nav === "weapon" && weaponOptions.length === 1) {
+      setWeaponId(weaponOptions[0].id);
+      setTargetId("");
+      setNav("target");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav, weaponOptions.length]);
+
+  // Move o token DIRETO 1 casa na direção (recalcula alvos ao vivo).
+  function stepMove(dx: number, dy: number) {
+    const p = stagedPos ?? actorPos;
+    const nx = p.x + dx;
+    const ny = p.y + dy;
+    if (nx < 0 || ny < 0 || nx >= grid || ny >= grid) return;
+    if (reachable(nx, ny) || (nx === actorPos.x && ny === actorPos.y)) {
+      setStagedPos({ x: nx, y: ny });
+    }
+  }
+
+  // Cargas mínimas de movimento para a casa encenada continuar alcançável
+  // (evita reduzir a carga e deixar o token "preso" fora do alcance).
+  function minMoveCharges(): number {
+    if (!stagedPos || !currentActor) return 0;
+    if (stagedPos.x === actorPos.x && stagedPos.y === actorPos.y) return 0;
+    for (let c = 0; c <= availableCharges; c++) {
+      const set = reachableCells(currentActor, battle!.tokens, grid, baseMv + c);
+      if (set.has(`${stagedPos.x},${stagedPos.y}`)) return c;
+    }
+    return availableCharges;
+  }
+
+  // Cargas formam um POOL único: movimento + ataque <= disponível.
+  function adjustDist(delta: number) {
+    if (nav === "move") {
+      const floor = minMoveCharges();
+      const cap = availableCharges - attackCharges; // sobra após o que já vai no ataque
+      setMoveCharges((c) => Math.max(floor, Math.min(cap, c + delta)));
+    } else {
+      const cap = availableCharges - moveCharges;
+      setAttackCharges((c) => Math.max(0, Math.min(cap, c + delta)));
+    }
+  }
+
+  type InputAction = "up" | "down" | "left" | "right" | "confirm" | "cancel" | "distMinus" | "distPlus";
+  const inputRef = useRef<(a: InputAction) => void>(() => {});
+  inputRef.current = (a) => {
+    if (!controlsActor) return;
+    if (a === "distMinus") return adjustDist(-1);
+    if (a === "distPlus") return adjustDist(1);
+    if (nav === "move") {
+      if (a === "up") stepMove(0, -1);
+      else if (a === "down") stepMove(0, 1);
+      else if (a === "left") stepMove(-1, 0);
+      else if (a === "right") stepMove(1, 0);
+      else if (a === "confirm" || a === "cancel") setNav("root");
+      return;
+    }
+    if (nav === "inspect") {
+      const clamp = (v: number) => Math.max(0, Math.min(grid - 1, v));
+      if (a === "up") setCursor((c) => ({ ...c, y: clamp(c.y - 1) }));
+      else if (a === "down") setCursor((c) => ({ ...c, y: clamp(c.y + 1) }));
+      else if (a === "left") setCursor((c) => ({ ...c, x: clamp(c.x - 1) }));
+      else if (a === "right") setCursor((c) => ({ ...c, x: clamp(c.x + 1) }));
+      else if (a === "confirm" || a === "cancel") setNav("root");
+      return;
+    }
+    const items = menu.items;
+    if (a === "up") setMenuIndex((i) => (i - 1 + items.length) % items.length);
+    else if (a === "down") setMenuIndex((i) => (i + 1) % items.length);
+    else if (a === "confirm") {
+      const it = items[menuIndex];
+      if (it && !it.disabled) it.run();
+    } else if (a === "cancel") {
+      menu.back?.();
+    }
+  };
+
+  // No modo "target", o alvo destacado segue o item selecionado.
+  useEffect(() => {
+    if (nav === "target") setTargetId(targets[menuIndex]?.id ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav, menuIndex]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const el = document.activeElement;
+      if (el && ["INPUT", "SELECT", "TEXTAREA"].includes(el.tagName)) return;
+      const map: Record<string, InputAction> = {
+        ArrowUp: "up",
+        ArrowDown: "down",
+        ArrowLeft: "left",
+        ArrowRight: "right",
+        Enter: "confirm",
+        " ": "confirm",
+        Escape: "cancel",
+        Backspace: "cancel",
+        q: "distMinus",
+        e: "distPlus",
+      };
+      const action = map[e.key];
+      if (action) {
+        e.preventDefault();
+        inputRef.current(action);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+
+    let raf = 0;
+    const prev: Record<number, boolean> = {};
+    const REPEAT = 170;
+    const lastDir: Record<string, number> = {};
+    function poll() {
+      const pads = navigator.getGamepads?.() ?? [];
+      const gp = pads.find((p) => p);
+      if (gp) {
+        const now = performance.now();
+        const press = (i: number) => {
+          const down = !!gp.buttons[i]?.pressed;
+          const was = prev[i] ?? false;
+          prev[i] = down;
+          return down && !was;
+        };
+        if (press(0)) inputRef.current("confirm"); // A
+        if (press(1)) inputRef.current("cancel"); // B
+        if (press(4)) inputRef.current("distMinus"); // L1
+        if (press(5)) inputRef.current("distPlus"); // R1
+        // Navegação só no D-PAD (analógico esquerdo é reservado para o pan).
+        const dir = (i: number, a: InputAction) => {
+          const dpad = !!gp.buttons[i]?.pressed;
+          if (dpad) {
+            if (now - (lastDir[a] ?? 0) > REPEAT) {
+              lastDir[a] = now;
+              inputRef.current(a);
+            }
+          } else {
+            lastDir[a] = 0;
+          }
+        };
+        dir(12, "up");
+        dir(13, "down");
+        dir(14, "left");
+        dir(15, "right");
+
+        // Câmera: analógico ESQUERDO faz pan; analógico DIREITO (eixo Y) faz zoom.
+        const dz = 0.16; // zona morta
+        const lx = gp.axes[0] ?? 0;
+        const ly = gp.axes[1] ?? 0;
+        if (Math.abs(lx) > dz || Math.abs(ly) > dz) {
+          const cur = panRef.current;
+          setPan({ x: cur.x - lx * 8, y: cur.y - ly * 8 });
+        }
+        const ry = gp.axes[3] ?? 0;
+        if (Math.abs(ry) > dz) {
+          setZoom(clampZoom(zoomRef.current - ry * 0.02));
+        }
+      }
+      raf = requestAnimationFrame(poll);
+    }
+    raf = requestAnimationFrame(poll);
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  // Transmite o planejamento (movimento/arma/alvo) para todos verem em tempo real.
+  useEffect(() => {
+    if (!controlsActor || !currentActor) return;
+    emit("battle:intent", {
+      actorId: currentActor.id,
+      staged: stagedPos,
+      mode: nav,
+      moveCharges,
+      attackCharges,
+      weaponId: nav === "weapon" ? weaponOptions[menuIndex]?.id ?? "" : effectiveWeaponId,
+      targetId: nav === "target" || nav === "confirmAttack" ? effectiveTargetId : "",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    controlsActor,
+    currentActor?.id,
+    stagedPos,
+    nav,
+    menuIndex,
+    moveCharges,
+    attackCharges,
+    effectiveWeaponId,
+    effectiveTargetId,
+  ]);
+
   return (
     <div className={styles.layout}>
       <section className={styles.arena}>
-        <div className={styles.bannerRow}>
-          <h2>Batalha</h2>
-          {battle.turnEndsAt > 0 && (
+        <div className={styles.topBar}>
+          {endsAt > 0 && (
             <span
-              className={`${styles.timer} ${
-                battle.turnEndsAt - now < 30000 ? styles.timerLow : ""
-              }`}
+              className={`${styles.timer} ${endsAt - now < 10000 ? styles.timerLow : ""}`}
             >
-              ⏱ {formatRemaining(battle.turnEndsAt - now)}
+              ⏱ {formatRemaining(endsAt - now)}
             </span>
           )}
           <span className={styles.dist}>distorção {state.game.distortion}/10</span>
+          <button
+            type="button"
+            className={styles.camReset}
+            title="Centralizar câmera"
+            onClick={() => {
+              setZoom(1);
+              setPan({ x: 0, y: 0 });
+            }}
+          >
+            ⟳ câmera
+          </button>
         </div>
 
         <div
-          className={styles.grid}
-          style={{ gridTemplateColumns: `repeat(${grid}, 1fr)` }}
+          className={styles.scene}
+          onWheel={(e) => {
+            setZoom((z) => clampZoom(z - e.deltaY * 0.001));
+          }}
+          onContextMenu={(e) => e.preventDefault()}
+          onPointerDown={(e) => {
+            // Botão direito arrasta (pan) o tabuleiro.
+            if (e.button !== 2) return;
+            e.preventDefault();
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            const start = { x: e.clientX, y: e.clientY };
+            const base = { ...panRef.current };
+            const move = (ev: PointerEvent) => {
+              setPan({ x: base.x + (ev.clientX - start.x), y: base.y + (ev.clientY - start.y) });
+            };
+            const up = () => {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          }}
+        >
+        <div
+          className={styles.board}
+          style={{
+            gridTemplateColumns: `repeat(${grid}, var(--cell))`,
+            gridTemplateRows: `repeat(${grid}, var(--cell))`,
+            ["--zoom" as string]: zoom,
+            ["--pan-x" as string]: `${pan.x}px`,
+            ["--pan-y" as string]: `${pan.y}px`,
+          }}
         >
           {Array.from({ length: grid * grid }).map((_, idx) => {
             const x = idx % grid;
@@ -334,15 +886,21 @@ export function BattleView() {
             const canReach = reachable(x, y);
             // Casa onde o ator está exibido agora (real ou encenada).
             const isActorCell = fromPos.x === x && fromPos.y === y && !!currentActor;
-            // Só o alvo efetivamente escolhido recebe a borda animada (ação).
-            const isTarget =
-              phase === "action" &&
-              !!effectiveTargetId &&
-              !!tok &&
-              tok.id === effectiveTargetId;
-            // Guia laranja: alvo atingível por alguma arma durante o movimento.
-            const isGuide =
-              phase === "move" && !!tok && moveGuideTargetIds.has(tok.id);
+            // Borda animada vermelha: alvo selecionado / prévia da arma (todos veem).
+            const isTarget = !!tok && highlightTargetIds.has(tok.id);
+            // Guia laranja: alvos atingíveis durante o planejamento de movimento.
+            const isGuide = movePlanning && !!tok && moveGuideTargetIds.has(tok.id);
+            // Anéis de distorção empilhados (sobem em Z): verde no movimento do
+            // ator, vermelho no alvo do ataque. Visível a todos.
+            const targetingAttack = effMode === "target" || effMode === "confirmAttack";
+            const ring =
+              movePlanning && isActorCell && effMoveCharges > 0
+                ? { n: effMoveCharges, color: styles.ringGreen }
+                : targetingAttack && !!tok && tok.id === effTargetId && effAttackCharges > 0
+                  ? { n: effAttackCharges, color: styles.ringRed }
+                  : null;
+            // Cursor branco do modo Inspecionar.
+            const isCursor = nav === "inspect" && cursor.x === x && cursor.y === y;
             return (
               <div
                 key={idx}
@@ -352,50 +910,44 @@ export function BattleView() {
                   isTarget ? styles.target : "",
                   isGuide ? styles.guide : "",
                   isActorCell ? styles.actorCell : "",
+                  isCursor ? styles.cursor : "",
                 ].join(" ")}
-                onClick={() => clickCell(x, y)}
+                onClick={() => {
+                  if (nav === "inspect") setCursor({ x, y });
+                  else clickCell(x, y);
+                }}
               >
-                <span className={styles.coord}>
-                  {String.fromCharCode(65 + x)}
-                  {y + 1}
-                </span>
                 {tok && (
-                  <TokenChip
+                  <Cube
                     token={tok}
+                    atPos={displayPos(tok)}
                     tokens={battle.tokens}
                     active={tok.id === currentActor?.id}
+                    damage={damagePopups.find((d) => d.tokenId === tok.id)}
                     onInspect={
-                      // Na fase de mover, clicar no próprio ator escolhe "ficar aqui"
-                      // em vez de abrir o inspetor.
-                      isGM &&
+                      // Todos podem inspecionar clicando — exceto a própria casa do
+                      // ator durante o movimento (lá o clique serve para mover).
                       !(phase === "move" && controlsActor && tok.id === currentActor?.id)
                         ? () => setInspectId(tok.id)
                         : undefined
                     }
                   />
                 )}
+                {ring &&
+                  Array.from({ length: ring.n }).map((_, i) => (
+                    <span
+                      key={i}
+                      className={`${styles.ring} ${ring.color}`}
+                      style={{
+                        transform: `translateZ(calc(var(--cell) * ${0.22 * (i + 1)}))`,
+                      }}
+                    />
+                  ))}
               </div>
             );
           })}
-
-          {/* Popups de dano por posição — aparecem mesmo se o token morreu. */}
-          {damagePopups.map((d) => (
-            <span
-              key={d.key}
-              className={styles.dmgPopup}
-              style={{
-                left: `${((d.pos.x + 0.5) / grid) * 100}%`,
-                top: `${((d.pos.y + 0.5) / grid) * 100}%`,
-              }}
-            >
-              -{d.amount}
-              {d.notes && d.notes.length > 0 && (
-                <span className={styles.dmgNote}>{d.notes.join(" ")}</span>
-              )}
-            </span>
-          ))}
         </div>
-
+        </div>
       </section>
 
       <aside className={styles.side}>
@@ -403,56 +955,37 @@ export function BattleView() {
           <div className={styles.actionPanel}>
             <h3>Turno: {currentActor.label}</h3>
 
-            {/* Escolha livre entre movimentar e agir (em qualquer ordem). Após usar a
-                ação principal, sobra só o movimento (a aba de ação some). */}
-            {!acted && (
-              <div className={styles.turnTabs}>
-                <button
-                  type="button"
-                  className={phase === "move" ? styles.turnTabOn : ""}
-                  onClick={() => setPhase("move")}
-                >
-                  Movimentar
-                </button>
-                <button
-                  type="button"
-                  className={phase === "action" ? styles.turnTabOn : ""}
-                  onClick={confirmMove}
-                >
-                  Ação principal
-                </button>
-              </div>
-            )}
-
-            {phase === "move" ? (
+            {/* Menu de comando estilo FFT Tactics (mouse, teclado e controle). */}
+            {nav === "inspect" ? (
               <>
                 <p className="muted">
-                  Mover (mv {actorMv}) — escolha uma casa destacada. Você pode mover
-                  antes ou depois de agir; o movimento é reversível.
+                  Inspecionar — mova o cursor branco (direcionais/clique). Os dados
+                  aparecem no painel inferior esquerdo.
+                </p>
+                <button className={styles.confirm} onClick={() => setNav("root")}>
+                  ◀ Voltar ao menu
+                </button>
+              </>
+            ) : nav === "move" ? (
+              <>
+                <p className="muted">
+                  Mover (mv {actorMv}) — direcionais ou clique movem o token direto.
                   {acted ? " Ação já usada." : ""}
                 </p>
-                <p className={styles.staticHint}>
-                  destino:{" "}
-                  {stagedPos
-                    ? `(${String.fromCharCode(65 + stagedPos.x)}${stagedPos.y + 1})`
-                    : `ficar em (${String.fromCharCode(65 + actorPos.x)}${actorPos.y + 1})`}
-                </p>
-
                 <div className={styles.charges}>
                   <div className={styles.chargeHead}>
-                    <span>Distorção: movimento</span>
+                    <span>Distorção: movimento (L1/R1)</span>
                     <span className={styles.chargeCount}>
-                      {availableCharges - moveCharges}/{availableCharges} cargas
+                      {availableCharges - moveCharges - attackCharges}/{availableCharges} livres
                     </span>
                   </div>
                   <div className={styles.stepper}>
                     <button
                       type="button"
-                      disabled={moveCharges <= 0}
-                      onClick={() => {
-                        setMoveCharges((c) => Math.max(0, c - 1));
-                        setStagedPos(null);
-                      }}
+                      disabled={moveCharges <= minMoveCharges()}
+                      onClick={() =>
+                        setMoveCharges((c) => Math.max(minMoveCharges(), c - 1))
+                      }
                     >
                       −
                     </button>
@@ -461,293 +994,137 @@ export function BattleView() {
                     </span>
                     <button
                       type="button"
-                      disabled={moveCharges >= availableCharges}
+                      disabled={moveCharges + attackCharges >= availableCharges}
                       onClick={() => setMoveCharges((c) => c + 1)}
                     >
                       +
                     </button>
                   </div>
-                  <p className={styles.chargeNote}>cada carga = +1 casa de movimento</p>
                 </div>
-
-                {acted ? (
-                  <button className={styles.confirm} onClick={endTurn}>
-                    {hasMoved ? "Confirmar movimento e encerrar ▶" : "Encerrar turno ▶"}
-                  </button>
-                ) : (
-                  <>
-                    <button className={styles.confirm} onClick={confirmMove}>
-                      Ação principal ▶
-                    </button>
-                    <button className={styles.endTurn} onClick={endTurn}>
-                      Encerrar turno
-                    </button>
-                  </>
-                )}
+                <button className={styles.confirm} onClick={() => setNav("root")}>
+                  ◀ Voltar ao menu
+                </button>
               </>
             ) : (
-              <>
-                <p className="muted">
-                  {acted
-                    ? "Ação já usada — você ainda pode movimentar."
-                    : "Escolha sua ação."}
-                </p>
-
-                {adjMod !== 0 && (
-                  <p className={styles.staticHint}>
+              <div className={styles.cmdMenu}>
+                <p className={styles.menuTitle}>{menu.title}</p>
+                {menu.note && <p className={styles.menuNote}>{menu.note}</p>}
+                {adjMod !== 0 && nav !== "root" && (
+                  <p className={styles.cmdHint}>
                     adjacência: {adjMod > 0 ? "+" : ""}
-                    {adjMod} nos ataques
+                    {adjMod} no ataque
                   </p>
                 )}
-
-                <label>
-                  Ação
-                  <select
-                    value={actionKind}
-                    onChange={(e) => {
-                      setActionKind(e.target.value as ActionKind);
-                      setTargetId("");
-                      setActionObjectId("");
+                {menu.items.map((it, i) => (
+                  <button
+                    key={it.key}
+                    type="button"
+                    disabled={it.disabled}
+                    className={`${styles.cmdItem} ${i === menuIndex ? styles.cmdOn : ""}`}
+                    onMouseEnter={() => setMenuIndex(i)}
+                    onClick={() => {
+                      setMenuIndex(i);
+                      if (!it.disabled) it.run();
                     }}
                   >
-                    {/* Ação especial só quando há objeto adjacente — e vem primeiro. */}
-                    {hasActionObject && <option value="special">Ação especial</option>}
-                    <option value="attack">Atacar</option>
-                    <option value="useItem">Usar item</option>
-                  </select>
-                </label>
-
-                {actionKind === "attack" && (
-                  <div className={styles.weaponList}>
-                    <button
-                      type="button"
-                      className={`${styles.weaponRow} ${
-                        effectiveWeaponId === "" ? styles.weaponOn : ""
-                      }`}
-                      onClick={() => {
-                        setWeaponId("");
-                        setTargetId("");
-                      }}
-                    >
-                      <span className={styles.weaponName}>Mãos Livres</span>
-                      <span className={styles.weaponMeta}>1d4 · alc 1</span>
-                    </button>
-                    {myWeapons.map((w) => {
-                      const ammoLeft = w.maxAmmo
-                        ? currentActor.ammo?.[w.id] ?? 0
-                        : null;
-                      const empty = ammoLeft !== null && ammoLeft <= 0;
-                      return (
-                        <button
-                          key={w.id}
-                          type="button"
-                          disabled={empty}
-                          className={`${styles.weaponRow} ${
-                            effectiveWeaponId === w.id ? styles.weaponOn : ""
-                          }`}
-                          onClick={() => {
-                            setWeaponId(w.id);
-                            setTargetId("");
-                          }}
-                        >
-                          <span className={styles.weaponName}>{w.name}</span>
-                          <span className={styles.weaponMeta}>
-                            {w.damage} · alc {bandLabel(weaponBand(w))}
-                            {w.area ? ` · área ${w.area}` : ""}
-                            {ammoLeft !== null
-                              ? ` · ⦿ ${ammoLeft}/${w.maxAmmo}${empty ? " (vazio)" : ""}`
-                              : ""}
-                          </span>
-                          {w.description && (
-                            <span className={styles.weaponDesc}>{w.description}</span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {actionKind === "special" && (
-                  <label>
-                    Objeto adjacente
-                    <select
-                      value={actionObjectId}
-                      onChange={(e) => {
-                        setActionObjectId(e.target.value);
-                        setTargetId("");
-                        setReloadWeaponId("");
-                      }}
-                    >
-                      <option value="">— escolha o objeto —</option>
-                      {adjActionObjects.map((o) => (
-                        <option key={o.id} value={o.id}>
-                          {o.label} [{ruleOf(o)?.badge}]
-                          {o.usesLeft !== undefined ? ` · ${o.usesLeft} uso(s)` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {actionObject && (
-                  <p className={styles.staticHint}>{ruleOf(actionObject)?.description}</p>
-                )}
-                {/* Recarga via objeto: escolher a arma. */}
-                {actionKind === "special" &&
-                  actionObjectRule?.kind === "reload" &&
-                  myWeapons.some((w) => w.maxAmmo) && (
-                    <label>
-                      Recarregar
-                      <select
-                        value={reloadWeaponId}
-                        onChange={(e) => setReloadWeaponId(e.target.value)}
-                      >
-                        <option value="">— escolha a arma —</option>
-                        {myWeapons
-                          .filter((w) => w.maxAmmo)
-                          .map((w) => (
-                            <option key={w.id} value={w.id}>
-                              {w.name} (⦿ {currentActor.ammo?.[w.id] ?? 0}/{w.maxAmmo})
-                            </option>
-                          ))}
-                      </select>
-                    </label>
-                  )}
-                {/* Baú: lista o que será recebido. */}
-                {actionKind === "special" &&
-                  actionObjectRule?.kind === "chest" &&
-                  actionObject?.grant?.length && (
-                    <p className={styles.staticHint}>
-                      Recebe:{" "}
-                      {actionObject.grant
-                        .map(
-                          (g) =>
-                            `${state.items.find((i) => i.id === g.id)?.name ?? g.id} ×${g.qty}`,
-                        )
-                        .join(", ")}
-                    </p>
-                  )}
-
-                {actionKind === "useItem" ? (
-                  <div className={styles.weaponList}>
-                    {myConsumables.length === 0 && (
-                      <p className={styles.staticHint}>Nenhum consumível.</p>
-                    )}
-                    {myConsumables.map(({ item, qty }) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className={`${styles.weaponRow} ${
-                          useItemId === item.id ? styles.weaponOn : ""
-                        }`}
-                        onClick={() => setUseItemId(item.id)}
-                      >
-                        <span className={styles.weaponName}>
-                          {item.name} ×{qty}
-                        </span>
-                        <span className={styles.weaponMeta}>
-                          {item.heal ? `cura +${item.heal} HP` : ""}
-                          {item.heal && item.improveState ? " · melhora estado" : ""}
-                          {item.ammo ? `munição +${item.ammo}` : ""}
-                        </span>
-                        {item.description && (
-                          <span className={styles.weaponDesc}>{item.description}</span>
-                        )}
-                      </button>
-                    ))}
-                    {/* Munição: escolher arma a recarregar. */}
-                    {useItemId &&
-                      state.items.find((i) => i.id === useItemId)?.ammo &&
-                      myWeapons.some((w) => w.maxAmmo) && (
-                        <label>
-                          Recarregar
-                          <select
-                            value={reloadWeaponId}
-                            onChange={(e) => setReloadWeaponId(e.target.value)}
-                          >
-                            <option value="">— escolha a arma —</option>
-                            {myWeapons
-                              .filter((w) => w.maxAmmo)
-                              .map((w) => (
-                                <option key={w.id} value={w.id}>
-                                  {w.name} (⦿ {currentActor.ammo?.[w.id] ?? 0}/{w.maxAmmo})
-                                </option>
-                              ))}
-                          </select>
-                        </label>
-                      )}
-                  </div>
-                ) : (
-                  <>
-                    <label>
-                      Alvo (alcance {bandLabel(weaponRangeBand)})
-                      <select
-                        value={effectiveTargetId}
-                        onChange={(e) => setTargetId(e.target.value)}
-                      >
-                        {targets.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.label} ({String.fromCharCode(65 + t.pos.x)}
-                            {t.pos.y + 1}) · {t.hp}/{t.maxHp} HP
-                            {t.kind === "object" ? " · objeto" : ` · ${t.state}`}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    {targets.length === 0 && (
-                      <p className={styles.staticHint}>nenhum alvo no alcance</p>
-                    )}
-
-                    <div className={styles.charges}>
-                      <div className={styles.chargeHead}>
-                        <span>Distorção: ataque</span>
-                        <span className={styles.chargeCount}>
-                          {availableCharges - attackCharges}/{availableCharges} cargas
-                        </span>
-                      </div>
-                      <div className={styles.stepper}>
-                        <button
-                          type="button"
-                          disabled={attackCharges <= 0}
-                          onClick={() => setAttackCharges((c) => Math.max(0, c - 1))}
-                        >
-                          −
-                        </button>
-                        <span className={styles.dmgPlus}>
-                          +{attackCharges * DISTORTION_DMG_PER_CHARGE} dano
-                        </span>
-                        <button
-                          type="button"
-                          disabled={attackCharges >= availableCharges}
-                          onClick={() => setAttackCharges((c) => c + 1)}
-                        >
-                          +
-                        </button>
-                      </div>
-                      <p className={styles.chargeNote}>
-                        cada carga = +{DISTORTION_DMG_PER_CHARGE} de dano
-                      </p>
+                    <span className={styles.cmdRow}>
+                      <span className={styles.cmdArrow}>▸</span>
+                      <span className={styles.cmdText}>
+                        {it.label}
+                        {it.key === "act" && acted ? " ✓" : ""}
+                      </span>
+                    </span>
+                    {it.meta && <span className={styles.cmdMeta}>{it.meta}</span>}
+                  </button>
+                ))}
+                {nav === "target" && (
+                  <div className={styles.charges}>
+                    <div className={styles.chargeHead}>
+                      <span>Distorção: ataque (L1/R1)</span>
+                      <span className={styles.chargeCount}>
+                        {availableCharges - moveCharges - attackCharges}/{availableCharges} livres
+                      </span>
                     </div>
-                  </>
+                    <div className={styles.stepper}>
+                      <button
+                        type="button"
+                        disabled={attackCharges <= 0}
+                        onClick={() => setAttackCharges((c) => Math.max(0, c - 1))}
+                      >
+                        −
+                      </button>
+                      <span className={styles.dmgPlus}>
+                        +{attackCharges * DISTORTION_DMG_PER_CHARGE} dano
+                      </span>
+                      <button
+                        type="button"
+                        disabled={moveCharges + attackCharges >= availableCharges}
+                        onClick={() => setAttackCharges((c) => c + 1)}
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
                 )}
-
-                <button
-                  className={styles.confirm}
-                  onClick={confirmAction}
-                  disabled={acted}
-                >
-                  {acted ? "Ação já usada" : "Confirmar ação (sem volta)"}
-                </button>
-                <button className={styles.endTurn} onClick={endTurn}>
-                  Encerrar turno
-                </button>
-              </>
+                <p className={styles.cmdHint}>direcionais · A/Enter confirma · B/Esc volta</p>
+              </div>
             )}
           </div>
         )}
 
-        {objectsOnBoard.length > 0 && (
-          <div className={styles.objects}>
-            <h3>Objetos em campo</h3>
+      </aside>
+
+      {/* Iniciativa no topo-esquerdo. */}
+      <div className={`${styles.initiative} ${styles.initPanel}`}>
+        <h3>Iniciativa</h3>
+        <ol>
+          {battle.initiative.map((i, idx) => {
+            const cur = idx === battle.turnIndex;
+            return (
+              <li key={i.tokenId} className={cur ? styles.curTurn : ""}>
+                <span>
+                  {cur && <span className={styles.turnArrow}>▶ </span>}
+                  {i.label}
+                </span>
+                <b>{i.value}</b>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+
+      {/* Topo-direito: Objetos + Histórico em abas. */}
+      <div className={`${styles.objects} ${styles.objPanel}`}>
+        <div className={styles.panelTabs}>
+          <button
+            type="button"
+            className={rightTab === "objects" ? styles.panelTabOn : ""}
+            onClick={() => setRightTab("objects")}
+          >
+            Objetos ({objectsOnBoard.length})
+          </button>
+          <button
+            type="button"
+            className={rightTab === "log" ? styles.panelTabOn : ""}
+            onClick={() => setRightTab("log")}
+          >
+            Histórico
+          </button>
+          {isGM && (
+            <span className={styles.logActions}>
+              <button className={styles.logLink} onClick={() => emit("gm:advanceTurn", { dir: -1 })}>
+                ◀
+              </button>
+              <button className={styles.logLink} onClick={() => emit("gm:advanceTurn", { dir: 1 })}>
+                ▶
+              </button>
+            </span>
+          )}
+        </div>
+        {rightTab === "objects" ? (
+          objectsOnBoard.length === 0 ? (
+            <p className="muted">Nenhum objeto em campo.</p>
+          ) : (
             <ul>
               {objectsOnBoard.map((o) => {
                 const rule = ruleOf(o);
@@ -755,8 +1132,7 @@ export function BattleView() {
                 return (
                   <li key={o.id} className={near ? styles.objNear : ""}>
                     <span className={styles.objName}>
-                      {o.label} ({String.fromCharCode(65 + o.pos.x)}
-                      {o.pos.y + 1})
+                      {o.label}
                       {rule ? ` · ${objectBadge(o)}` : ""}
                       {o.hp !== undefined ? ` · ${o.hp} HP` : ""}
                       {near ? " ◀ adjacente" : ""}
@@ -766,85 +1142,72 @@ export function BattleView() {
                 );
               })}
             </ul>
+          )
+        ) : (
+          <div className={styles.logBody}>
+            {battle.log.map((l, i) => (
+              <div key={i} className={styles.logLine}>
+                &gt; {l}
+              </div>
+            ))}
           </div>
         )}
-
-        {isGM && inspected && <TokenInspector token={inspected} state={state} onClose={() => setInspectId(null)} />}
-
-        <div className={styles.initiative}>
-          <h3>Iniciativa</h3>
-          <ol>
-            {battle.initiative.map((i, idx) => (
-              <li key={i.tokenId} className={idx === battle.turnIndex ? styles.curTurn : ""}>
-                <span>{i.label}</span>
-                <b>{i.value}</b>
-              </li>
-            ))}
-          </ol>
-        </div>
-
-      </aside>
-
-      <div className={styles.log}>
-        <div className={styles.logHeader}>
-          <h3 className={styles.logTitle}>Histórico</h3>
-          {isGM && (
-            <div className={styles.logActions}>
-              <button
-                className={styles.logLink}
-                onClick={() => emit("gm:advanceTurn", { dir: -1 })}
-              >
-                ◀ turno
-              </button>
-              <button
-                className={styles.logLink}
-                onClick={() => emit("gm:advanceTurn", { dir: 1 })}
-              >
-                turno ▶
-              </button>
-              <button
-                className={`${styles.logLink} ${styles.logLinkDanger}`}
-                onClick={() => emit("gm:endBattle")}
-              >
-                encerrar combate
-              </button>
-            </div>
-          )}
-        </div>
-        <div className={styles.logBody}>
-          {battle.log.map((l, i) => (
-            <div key={i} className={styles.logLine}>
-              &gt; {l}
-            </div>
-          ))}
-        </div>
       </div>
+
+      {/* Inferior-esquerdo: inspetor (sempre visível; se nada selecionado, o ator atual). */}
+      {inspectShown && (
+        <div className={styles.inspectPanel}>
+          <TokenInspector
+            token={inspectShown}
+            state={state}
+            showHp={isGM}
+            onClose={inspected ? () => setInspectId(null) : undefined}
+            onEdit={
+              isGM
+                ? (patch) => emit("gm:editToken", { tokenId: inspectShown.id, ...patch })
+                : undefined
+            }
+          />
+        </div>
+      )}
     </div>
   );
 }
 
-function TokenChip({
+function Cube({
   token,
+  atPos,
   tokens,
   active,
+  damage,
   onInspect,
 }: {
   token: Token;
+  atPos: { x: number; y: number };
   tokens: Token[];
   active?: boolean;
+  damage?: DamagePopup;
   onInspect?: () => void;
 }) {
-  const stateIdx = token.state ? STATES.indexOf(token.state) : 0;
   const rule = ruleOf(token);
-  // Badges de bônus/desvantagem que este token recebe por adjacência.
-  const badges =
-    token.kind === "object" ? [] : adjacencyMods(token, tokens).badges;
   const isNeutral = token.kind === "enemy" && token.neutral;
+  const kindClass = isNeutral ? "npc" : token.kind;
+  const isUnit = token.kind === "player" || token.kind === "enemy";
+  const isDead = isUnit && token.state === "Morto";
+  const hasHp = token.hp !== undefined;
+  const dt = token.charges ?? 0;
+  // Bônus/desvantagens por adjacência — a partir da posição EXIBIDA (encenada),
+  // para sumir assim que o token sai de perto do objeto durante o movimento.
+  // Corpos não recebem mais bônus.
+  const adjBadges =
+    token.kind === "object" || isDead
+      ? []
+      : adjacencyMods({ ...token, pos: atPos }, tokens).badges;
   return (
     <div
-      className={`${styles.chip} ${styles["chip_" + token.kind]} ${
-        isNeutral ? styles.chip_npc : ""
-      } ${active ? styles.chipActive : ""}`}
+      className={`${styles.cube} ${styles["cube_" + kindClass]} ${
+        active ? styles.cubeActive : ""
+      } ${isDead ? styles.cubeDead : ""}`}
       title={token.label}
       onClick={
         onInspect
@@ -855,41 +1218,44 @@ function TokenChip({
           : undefined
       }
     >
-      {token.kind === "object" && <span className={styles.chipObj}>◆</span>}
-      <span className={styles.chipLabel}>{token.label}</span>
-      {(token.kind === "enemy" || token.kind === "player") && (
-        <span className={styles.chipHp}>
-          {token.hp}/{token.maxHp}
-        </span>
-      )}
-      {token.kind === "object" && token.hp !== undefined && (
-        <span className={styles.chipHp}>
-          {token.hp}/{token.maxHp} HP
-        </span>
-      )}
-      {(token.kind === "enemy" || token.kind === "player") && token.state && (
-        <span className={`${styles.chipState} ${styles["st" + stateIdx]}`}>
-          {token.state}
-        </span>
-      )}
-      {(token.kind === "player" || token.kind === "enemy") && (token.charges ?? 0) > 0 && (
-        <span className={styles.chipCharges}>⚡{token.charges}</span>
-      )}
-      {token.kind === "object" && rule && (
-        <span className={styles.chipBadge}>{objectBadge(token)}</span>
-      )}
-      {badges.length > 0 && (
-        <span className={styles.chipMods}>
-          {badges.map((bdg, i) => (
-            <span
-              key={i}
-              className={bdg.kind === "bonus" ? styles.badgeUp : styles.badgeDown}
-            >
-              {bdg.badge}
-            </span>
-          ))}
-        </span>
-      )}
+      {/* corpo 3D: topo + duas paredes */}
+      <span className={styles.cubeBody}>
+        <span className={`${styles.cubeFace} ${styles.cubeTop}`} />
+        <span className={`${styles.cubeFace} ${styles.cubeFront}`} />
+        <span className={`${styles.cubeFace} ${styles.cubeSide}`} />
+      </span>
+
+      {/* rótulos (billboard) acima do cubo — sempre visíveis */}
+      <span className={styles.cubeLabel}>
+        {damage && <span className={styles.cubeDmg}>-{damage.amount}</span>}
+        <span className={styles.cubeName}>{token.label}</span>
+        {hasHp && !isDead && (
+          <span className={styles.cubeHp}>
+            {token.hp}/{token.maxHp}
+            {isUnit && dt > 0 ? (
+              <span className={styles.cubeDt}> ◆{dt}</span>
+            ) : null}
+          </span>
+        )}
+        {isUnit && token.state && (
+          <span className={styles.cubeStateLabel}>{token.state}</span>
+        )}
+        {token.kind === "object" && rule && (
+          <span className={styles.cubeBadgeLabel}>{objectBadge(token)}</span>
+        )}
+        {adjBadges.length > 0 && (
+          <span className={styles.cubeMods}>
+            {adjBadges.map((b, i) => (
+              <span
+                key={i}
+                className={b.kind === "bonus" ? styles.cubeBonus : styles.cubeMalus}
+              >
+                {b.badge}
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -897,48 +1263,90 @@ function TokenChip({
 function TokenInspector({
   token,
   state,
+  showHp,
   onClose,
+  onEdit,
 }: {
   token: Token;
   state: NonNullable<ReturnType<typeof useGame>["state"]>;
-  onClose: () => void;
+  showHp?: boolean;
+  onClose?: () => void;
+  onEdit?: (patch: { hp?: number; state?: string }) => void;
 }) {
   const rule = ruleOf(token);
   const npc = token.npcId ? state.npcs.find((n) => n.id === token.npcId) : null;
   const ch = token.characterId
     ? state.characters.find((c) => c.id === token.characterId)
     : null;
+  const isUnit = token.kind === "enemy" || token.kind === "player";
+  const item = (id: string) => state.items.find((i) => i.id === id) ?? null;
+
+  // Armas (com munição em campo) e consumíveis com quantidade.
+  const weaponIds = ch ? ch.items.map((s) => s.id) : npc?.weapons ?? [];
+  const weapons = weaponIds
+    .map(item)
+    .filter((w): w is NonNullable<typeof w> => !!w && w.category === "weapon");
+  const consumables = ch
+    ? ch.items
+        .map((s) => ({ it: item(s.id), qty: s.qty }))
+        .filter((e): e is { it: NonNullable<typeof e.it>; qty: number } =>
+          !!e.it && e.it.category === "item",
+        )
+    : [];
+
   return (
     <div className={styles.inspector}>
       <div className={styles.inspectHead}>
         <h3>{token.label}</h3>
-        <button onClick={onClose}>x</button>
+        {onClose && <button onClick={onClose}>x</button>}
       </div>
       <dl className={styles.inspectBody}>
-        <div>
-          <dt>tipo</dt>
-          <dd>{token.kind}</dd>
-        </div>
-        <div>
-          <dt>posição</dt>
-          <dd>
-            {String.fromCharCode(65 + token.pos.x)}
-            {token.pos.y + 1}
-          </dd>
-        </div>
-        {(token.kind === "enemy" || token.kind === "player") && (
-          <>
+        {/* HP só para o GM (showHp). Jogadores veem apenas o estado. */}
+        {isUnit && showHp &&
+          (onEdit ? (
+            <div>
+              <dt>HP</dt>
+              <dd>
+                <input
+                  type="number"
+                  className={styles.inspectInput}
+                  value={token.hp ?? 0}
+                  min={0}
+                  max={token.maxHp ?? 999}
+                  onChange={(e) => onEdit({ hp: Number(e.target.value) })}
+                />{" "}
+                / {token.maxHp}
+              </dd>
+            </div>
+          ) : (
             <div>
               <dt>HP</dt>
               <dd>
                 {token.hp}/{token.maxHp}
               </dd>
             </div>
-            <div>
-              <dt>estado</dt>
-              <dd>{token.state}</dd>
-            </div>
-          </>
+          ))}
+        {isUnit && (
+          <div>
+            <dt>estado</dt>
+            <dd>
+              {onEdit ? (
+                <select
+                  className={styles.inspectInput}
+                  value={token.state ?? "Disposto"}
+                  onChange={(e) => onEdit({ state: e.target.value })}
+                >
+                  {STATES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                token.state
+              )}
+            </dd>
+          </div>
         )}
         {token.kind === "player" && (
           <div>
@@ -946,45 +1354,19 @@ function TokenInspector({
             <dd>{token.charges ?? 0} carga(s)</dd>
           </div>
         )}
-        {npc && (
-          <>
-            <div>
-              <dt>dano</dt>
-              <dd>{npc.damage ?? "—"}</dd>
-            </div>
-            {npc.description && (
-              <div>
-                <dt>nota</dt>
-                <dd>{npc.description}</dd>
-              </div>
-            )}
-          </>
-        )}
         {ch && (
-          <>
-            <div>
-              <dt>nível</dt>
-              <dd>{ch.level}</dd>
-            </div>
-            <div>
-              <dt>MV / DF</dt>
-              <dd>
-                {ch.mv} / {ch.df}
-              </dd>
-            </div>
-            <div>
-              <dt>itens</dt>
-              <dd>
-                {ch.items
-                  .map((s) => {
-                    const name = state.items.find((i) => i.id === s.id)?.name;
-                    return name ? (s.qty > 1 ? `${name} ×${s.qty}` : name) : null;
-                  })
-                  .filter(Boolean)
-                  .join(", ") || "—"}
-              </dd>
-            </div>
-          </>
+          <div>
+            <dt>nível</dt>
+            <dd>
+              {ch.level} · MV {ch.mv} · DF {ch.df}
+            </dd>
+          </div>
+        )}
+        {npc?.description && (
+          <div>
+            <dt>nota</dt>
+            <dd>{npc.description}</dd>
+          </div>
         )}
         {rule && (
           <div>
@@ -995,6 +1377,41 @@ function TokenInspector({
           </div>
         )}
       </dl>
+
+      {weapons.length > 0 && (
+        <div className={styles.inspectList}>
+          <span className={styles.inspectListTitle}>Armas</span>
+          {weapons.map((w) => {
+            const ammo = w.maxAmmo ? token.ammo?.[w.id] ?? 0 : null;
+            return (
+              <div key={w.id} className={styles.inspectItem}>
+                <span className={styles.inspectItemName}>{w.name}</span>
+                <span className={styles.inspectItemMeta}>
+                  {w.damage} · alc {bandLabel(weaponBand(w))}
+                  {w.area ? ` · área ${w.area}` : ""}
+                  {ammo !== null ? ` · ⦿ ${ammo}/${w.maxAmmo}` : ""}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {consumables.length > 0 && (
+        <div className={styles.inspectList}>
+          <span className={styles.inspectListTitle}>Itens</span>
+          {consumables.map(({ it, qty }) => (
+            <div key={it.id} className={styles.inspectItem}>
+              <span className={styles.inspectItemName}>
+                {it.name} <b>×{qty}</b>
+              </span>
+              <span className={styles.inspectItemMeta}>
+                {it.heal ? `cura +${it.heal} HP` : it.ammo ? `munição +${it.ammo}` : "item"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

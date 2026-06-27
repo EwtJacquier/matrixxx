@@ -21,12 +21,25 @@ export interface DamagePopup extends DamageEvent {
   key: number;
 }
 
+/** Planejamento de turno compartilhado (feedback visual para todos). */
+export interface BattleIntent {
+  actorId: string;
+  staged: { x: number; y: number } | null;
+  mode: string;
+  moveCharges: number;
+  attackCharges: number;
+  weaponId: string;
+  targetId: string;
+}
+
 interface GameContextValue {
   connected: boolean;
   session: Session | null;
   state: PublicState | null;
   lastRoll: Roll | null;
   damagePopups: DamagePopup[];
+  battleIntent: BattleIntent | null;
+  turnEndsAt: number;
   error: string | null;
   authExpired: boolean;
   emit: (event: string, payload?: unknown) => void;
@@ -46,6 +59,8 @@ export function GameProvider({
   const [state, setState] = useState<PublicState | null>(null);
   const [lastRoll, setLastRoll] = useState<Roll | null>(null);
   const [damagePopups, setDamagePopups] = useState<DamagePopup[]>([]);
+  const [battleIntent, setBattleIntent] = useState<BattleIntent | null>(null);
+  const [turnEndsAt, setTurnEndsAt] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
 
@@ -69,6 +84,10 @@ export function GameProvider({
     });
     socket.on("state", (s: PublicState) => setState(s));
     socket.on("dice:roll", (r: Roll) => setLastRoll(r));
+    socket.on("battle:intent", (p: BattleIntent) => setBattleIntent(p));
+    socket.on("battle:timer", ({ turnEndsAt: t }: { turnEndsAt: number }) =>
+      setTurnEndsAt(t),
+    );
     socket.on("battle:damage", ({ events }: { events: DamageEvent[] }) => {
       const base = Date.now();
       const popups = events.map((e, i) => ({ ...e, key: base + i }));
@@ -106,7 +125,7 @@ export function GameProvider({
 
   return (
     <GameContext.Provider
-      value={{ connected, session, state, lastRoll, damagePopups, error, authExpired, emit }}
+      value={{ connected, session, state, lastRoll, damagePopups, battleIntent, turnEndsAt, error, authExpired, emit }}
     >
       {children}
     </GameContext.Provider>

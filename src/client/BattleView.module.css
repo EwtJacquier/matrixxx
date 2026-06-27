@@ -1,38 +1,91 @@
-/* Desktop: controles | grid | histórico (lado a lado). */
+/* Tabuleiro isométrico ocupa a tela; aside e log flutuam por cima (absolute). */
 .layout {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 560px) minmax(0, 1fr);
-  grid-template-areas: "side board log";
-  gap: 12px;
-  align-items: start;
-}
-
-.side {
-  grid-area: side;
-  min-width: 0;
+  position: relative;
+  width: 100%;
+  height: calc(100vh - 90px);
+  min-height: 520px;
+  overflow: hidden;
 }
 
 .arena {
-  grid-area: board;
-  min-width: 0;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Controles à esquerda (topo), histórico no canto inferior direito. */
+.side {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 320px;
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  z-index: 20;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  background: rgba(0, 0, 0, 0.82);
 }
 
 .log {
-  grid-area: log;
-  min-width: 0;
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  width: 300px;
+  max-height: 32%;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.85);
 }
 
-/* Mobile: grid primeiro, depois controles (com iniciativa) e o histórico por último. */
+.topBar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid var(--green-faint);
+  padding: 4px 10px;
+}
+
+/* Cena 3D: perspectiva e centralização do tabuleiro. */
+.scene {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  perspective: 3000px;
+  perspective-origin: 50% 42%;
+  overflow: hidden;
+  cursor: grab;
+}
+
+.scene:active {
+  cursor: grabbing;
+}
+
+.board {
+  --cell: 10vh;
+  --zoom: 1;
+  --pan-x: 0px;
+  --pan-y: 0px;
+  display: grid;
+  gap: 2px;
+  transform-style: preserve-3d;
+  /* pan (translate) e zoom (scale) externos, depois a rotação isométrica. */
+  transform: translate(var(--pan-x), var(--pan-y)) scale(var(--zoom))
+    rotateX(40deg) rotateZ(45deg);
+}
+
 @media (max-width: 980px) {
-  .layout {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "board"
-      "side"
-      "log";
+  .side {
+    width: 240px;
   }
 }
 
@@ -49,6 +102,63 @@
 .dist {
   color: var(--amber);
   font-size: 12px;
+}
+
+.camReset {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+/* Painéis flutuantes nos cantos superiores. */
+.initPanel {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 220px;
+  max-height: 40%;
+  overflow-y: auto;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.82);
+}
+
+/* Inspetor fixo no inferior-esquerdo. */
+.inspectPanel {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  width: 280px;
+  max-height: 42%;
+  overflow-y: auto;
+  z-index: 20;
+}
+
+/* Painel de abas (Objetos/Histórico) no topo-direito. */
+.panelTabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.panelTabs button {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.panelTabOn {
+  background: var(--green-faint);
+  border-color: var(--green);
+}
+
+.objPanel {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 280px;
+  max-height: 42%;
+  overflow-y: auto;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.82);
 }
 
 .timer {
@@ -104,20 +214,13 @@
   }
 }
 
-.grid {
-  display: grid;
-  gap: 3px;
-  width: 100%;
-  max-width: 560px;
-  position: relative;
-}
-
 .cell {
-  aspect-ratio: 1;
-  min-width: 0;
+  width: var(--cell);
+  height: var(--cell);
   border: 1px solid var(--green-faint);
-  background: #010401;
+  background: rgba(0, 30, 8, 0.55);
   position: relative;
+  transform-style: preserve-3d;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -164,9 +267,7 @@
   opacity: 0.5;
 }
 
-.reach:hover {
-  box-shadow: inset 0 0 10px var(--green-glow);
-}
+/* sem :hover — a borda 3D causava flicker ao mover o mouse */
 
 .staged {
   background: var(--green-faint);
@@ -224,8 +325,200 @@
   }
 }
 
-.actorCell {
-  outline: 1px dashed var(--green);
+/* Borda animada verde do ator atual (mesmo estilo "marching ants" do alvo). */
+.actorCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  background-image:
+    linear-gradient(90deg, var(--green) 50%, transparent 50%),
+    linear-gradient(90deg, var(--green) 50%, transparent 50%),
+    linear-gradient(0deg, var(--green) 50%, transparent 50%),
+    linear-gradient(0deg, var(--green) 50%, transparent 50%);
+  background-size: 12px 2px, 12px 2px, 2px 12px, 2px 12px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  animation: ants 0.5s linear infinite;
+}
+
+/* Anéis de distorção: cópia da borda do cubo, empilhada em Z (translateZ inline). */
+.ring {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  background-image:
+    linear-gradient(90deg, var(--ring) 50%, transparent 50%),
+    linear-gradient(90deg, var(--ring) 50%, transparent 50%),
+    linear-gradient(0deg, var(--ring) 50%, transparent 50%),
+    linear-gradient(0deg, var(--ring) 50%, transparent 50%);
+  background-size: 12px 2px, 12px 2px, 2px 12px, 2px 12px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  animation: ants 0.5s linear infinite;
+}
+
+.ringGreen {
+  --ring: var(--green);
+}
+
+.ringRed {
+  --ring: var(--red);
+}
+
+/* ---- Cubos 3D ---- */
+.cube {
+  position: absolute;
+  inset: 12%;
+  transform-style: preserve-3d;
+  cursor: pointer;
+  --ch: calc(var(--cell) * 0.6);
+  --cc: var(--green);
+}
+.cube_player { --cc: #00ff66; }
+.cube_enemy { --cc: #ff4444; }
+.cube_npc { --cc: #e8e8e8; }
+.cube_object { --cc: #ffcc00; }
+
+.cubeBody {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.cubeFace {
+  position: absolute;
+  border: 1px solid rgba(0, 0, 0, 0.55);
+}
+
+.cubeTop {
+  inset: 0;
+  background: var(--cc);
+  transform: translateZ(var(--ch));
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.4) inset;
+}
+
+.cubeFront {
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: var(--ch);
+  transform-origin: top;
+  transform: rotateX(90deg);
+  background: color-mix(in srgb, var(--cc) 62%, #000);
+}
+
+.cubeSide {
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: var(--ch);
+  transform-origin: left;
+  transform: rotateY(-90deg);
+  background: color-mix(in srgb, var(--cc) 40%, #000);
+}
+
+.cubeActive .cubeTop {
+  box-shadow: 0 0 10px var(--green-glow);
+}
+
+/* Corpo (morto): apenas semitransparente, mesmo tamanho, ainda ocupa a casa. */
+/* Morto: dim nas faces/label (opacity no .cube quebraria o preserve-3d). */
+.cubeDead {
+  pointer-events: none;
+}
+
+.cubeDead .cubeFace {
+  opacity: 0.3;
+}
+
+.cubeDead .cubeLabel {
+  opacity: 0.5;
+}
+
+/* Rótulos billboard acima do cubo (contra-rotaciona o tabuleiro). */
+.cubeLabel {
+  position: absolute;
+  left: 50%;
+  bottom: 50%;
+  width: 120px;
+  margin-left: -60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  pointer-events: none;
+  transform: translateZ(calc(var(--ch) + 6px)) rotateZ(-45deg) rotateX(-56deg);
+  transform-origin: center bottom;
+}
+
+.cubeName {
+  width: min-content;
+  font-size: 10px;
+  font-weight: bold;
+  text-align: center;
+  color: var(--green);
+  background: #000;
+  border: 1px solid var(--green-dim);
+  padding: 0 3px;
+}
+
+.cubeMods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  justify-content: center;
+}
+
+.cubeBonus,
+.cubeMalus {
+  font-size: 9px;
+  padding: 0 3px;
+  background: #000;
+}
+
+.cubeBonus {
+  color: var(--green);
+  border: 1px solid var(--green);
+}
+
+.cubeMalus {
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+
+.cubeHp {
+  width: min-content;
+  white-space: nowrap;
+  font-size: 10px;
+  text-align: center;
+  color: var(--green);
+  background: #000;
+  padding: 0 3px;
+}
+
+.cubeDt {
+  color: var(--green);
+  font-weight: bold;
+}
+
+.cubeStateLabel,
+.cubeBadgeLabel {
+  font-size: 10px;
+  text-align: center;
+  color: var(--amber);
+  background: #000;
+  padding: 0 3px;
+}
+
+.cubeDmg {
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--red);
+  text-shadow: 0 0 4px #000;
+  animation: dmgFloat 1.4s ease-out forwards;
 }
 
 .chip {
@@ -376,6 +669,43 @@
   flex: 1;
 }
 
+.inspectInput {
+  width: 56px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+
+.inspectList {
+  margin-top: 8px;
+  border-top: 1px solid var(--green-faint);
+  padding-top: 6px;
+}
+
+.inspectListTitle {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--green-dim);
+}
+
+.inspectItem {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(0, 255, 102, 0.08);
+}
+
+.inspectItemName {
+  font-size: 13px;
+  color: var(--green);
+}
+
+.inspectItemMeta {
+  font-size: 11px;
+  color: var(--amber);
+}
+
 .staticHint {
   font-size: 12px;
   color: var(--amber);
@@ -383,8 +713,9 @@
 }
 
 .log {
-  border: 1px solid var(--green-faint);
-  padding: 8px;
+  border: 1px solid var(--green-dim);
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.82);
 }
 
 .logHeader {
@@ -398,10 +729,7 @@
 
 .logTitle {
   margin: 0;
-  font-size: 12px;
-  color: var(--green-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 13px;
 }
 
 .logActions {
@@ -539,6 +867,14 @@
 .curTurn {
   color: var(--green);
   text-shadow: 0 0 6px var(--green-glow);
+  background: var(--green-faint);
+  outline: 1px solid var(--green);
+  padding: 1px 4px;
+  font-weight: bold;
+}
+
+.turnArrow {
+  color: var(--green);
 }
 
 .curTurn b {
@@ -676,6 +1012,94 @@
   border-color: var(--green);
   background: var(--green-faint);
   padding: 8px;
+}
+
+/* Menu de comando estilo FFT Tactics. */
+.cmdMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.menuTitle {
+  margin: 0 0 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--green-dim);
+}
+
+.menuNote {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--amber);
+}
+
+.cmdItem {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 7px 12px;
+  font-size: 14px;
+}
+
+.cmdRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cmdArrow {
+  opacity: 0;
+  color: var(--green);
+}
+
+.cmdOn .cmdArrow {
+  opacity: 1;
+}
+
+.cmdMeta {
+  font-size: 11px;
+  color: var(--amber);
+  padding-left: 16px;
+}
+
+.cmdOn {
+  background: var(--green-faint);
+  border-color: var(--green);
+  box-shadow: 0 0 8px var(--green-glow);
+}
+
+
+.cmdHint {
+  margin: 4px 0 0;
+  font-size: 10px;
+  color: var(--green-dim);
+}
+
+.cursor {
+  box-shadow: inset 0 0 12px rgba(255, 255, 255, 0.4);
+}
+
+.cursor::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  background-image:
+    linear-gradient(90deg, #fff 50%, transparent 50%),
+    linear-gradient(90deg, #fff 50%, transparent 50%),
+    linear-gradient(0deg, #fff 50%, transparent 50%),
+    linear-gradient(0deg, #fff 50%, transparent 50%);
+  background-size: 12px 2px, 12px 2px, 2px 12px, 2px 12px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  animation: ants 0.5s linear infinite;
 }
 
 .turnTabs {

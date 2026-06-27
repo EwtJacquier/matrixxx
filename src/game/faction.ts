@@ -27,5 +27,7 @@ export function canTarget(attacker: Token, target: Token): boolean {
   // Objeto com HP é destrutível e pode ser atacado por qualquer combatente.
   if (target.kind === "object") return (target.hp ?? 0) > 0;
   if (target.kind !== "player" && target.kind !== "enemy") return false;
+  // Corpos (mortos) não podem ser alvo.
+  if (target.state === "Morto") return false;
   return faction(attacker) !== faction(target);
 }
