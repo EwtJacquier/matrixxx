@@ -6,7 +6,7 @@ import { PlayerPanel } from "./PlayerPanel";
 import { BattleSetup } from "./BattleSetup";
 import styles from "./ScenarioView.module.css";
 
-export function ScenarioView() {
+export function ScenarioView({ onOpenSheet }: { onOpenSheet?: () => void }) {
   const { state, session, emit } = useGame();
   const [setup, setSetup] = useState(false);
   const isGM = session?.role === "gm";
@@ -88,7 +88,11 @@ export function ScenarioView() {
           <p className="muted">Nenhuma ficha criada ainda.</p>
         )}
         {state.characters.map((c) => (
-          <PlayerPanel key={c.id} character={c} />
+          <PlayerPanel
+            key={c.id}
+            character={c}
+            onOpenSheet={c.userId === session?.id ? onOpenSheet : undefined}
+          />
         ))}
       </aside>
 

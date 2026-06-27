@@ -35,14 +35,24 @@ function emptyCharacter(userId: string): Character {
 /** Descrição completa de um item para mostrar ao jogador. */
 function itemDesc(it: CatalogItem): string {
   const parts: string[] = [];
-  if (it.category === "weapon") parts.push(`Arma · dano ${it.damage ?? "—"} · alcance ${it.range ?? 1}`);
+  if (it.category === "weapon") {
+    const band = it.minRange && it.minRange > 1 ? `${it.minRange}-${it.range ?? 1}` : `${it.range ?? 1}`;
+    let w = `Arma · dano ${it.damage ?? "—"} · alcance ${band}`;
+    if (it.area) w += ` · área ${it.area}`;
+    if (it.maxAmmo) w += ` · munição ${it.maxAmmo}`;
+    parts.push(w);
+  }
   if (it.category === "accessory") {
     const bd: string[] = [];
     if (it.dfBonus) bd.push(`+${it.dfBonus} DF`);
     if (it.mvBonus) bd.push(`${it.mvBonus > 0 ? "+" : ""}${it.mvBonus} MV`);
     parts.push(`Acessório${bd.length ? ` · ${bd.join(", ")}` : ""}`);
   }
-  if (it.category === "item") parts.push("Item");
+  if (it.category === "item") {
+    if (it.heal) parts.push(`Cura +${it.heal} HP${it.improveState ? " · melhora estado" : ""}`);
+    else if (it.ammo) parts.push(`Munição +${it.ammo}`);
+    else parts.push("Item");
+  }
   if (it.description) parts.push(it.description);
   return parts.join(" — ");
 }
@@ -55,6 +65,7 @@ export function CharacterSheet() {
     [state, userId],
   );
   const [draft, setDraft] = useState<Character>(existing ?? emptyCharacter(userId));
+  const [tab, setTab] = useState<"disfarce" | "profissoes" | "hacks" | "itens">("disfarce");
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Inicializa o rascunho uma vez a partir do que existe; depois o estado local
@@ -70,9 +81,10 @@ export function CharacterSheet() {
 
   const slots = SLOTS_BY_LEVEL[draft.level];
 
-  // mv/df derivados dos acessórios equipados (entre os itens selecionados).
+  // mv/df derivados dos acessórios equipados (entre os itens do inventário).
+  const ownedIds = new Set(draft.items.map((s) => s.id));
   const accessories = state.items.filter(
-    (i) => i.category === "accessory" && draft.items.includes(i.id),
+    (i) => i.category === "accessory" && ownedIds.has(i.id),
   );
   const derivedMv = 2 + accessories.reduce((s, a) => s + (a.mvBonus ?? 0), 0);
   const derivedDf = 0 + accessories.reduce((s, a) => s + (a.dfBonus ?? 0), 0);
@@ -107,12 +119,23 @@ export function CharacterSheet() {
     }));
   }
 
-  function toggleInList(key: "roles" | "hacks" | "items", id: string, max: number) {
+  function toggleInList(key: "roles" | "hacks", id: string, max: number) {
     setDraft((d) => {
       const cur = d[key];
       if (cur.includes(id)) return { ...d, [key]: cur.filter((x) => x !== id) };
       if (cur.length >= max) return d;
       return { ...d, [key]: [...cur, id] };
+    });
+  }
+
+  // Inventário com quantidade. Acessórios/armas: máx 1. Consumíveis: até 9.
+  function setItemQty(id: string, qty: number) {
+    setDraft((d) => {
+      const others = d.items.filter((s) => s.id !== id);
+      if (qty <= 0) return { ...d, items: others };
+      // limite de 10 tipos distintos
+      if (!d.items.some((s) => s.id === id) && d.items.length >= 10) return d;
+      return { ...d, items: [...others, { id, qty }] };
     });
   }
 
@@ -208,42 +231,145 @@ export function CharacterSheet() {
             </label>
           </div>
 
-          <SelectList
-            title="Disfarce"
-            hint="escolha 1"
-            options={state.disguises.map((d) => ({ id: d.name, name: d.name, desc: d.description }))}
-            selected={draft.costume ? [draft.costume] : []}
-            onToggle={(name) => set("costume", draft.costume === name ? "" : name)}
-          />
+          {/* Disfarce, profissões, hacks e itens em abas (evita scroll gigante). */}
+          <div className={styles.tabs}>
+            {([
+              ["disfarce", `Disfarce`],
+              ["profissoes", `Profissões ${draft.roles.length}/${slots}`],
+              ["hacks", `Hacks ${draft.hacks.length}/${slots}`],
+              ["itens", `Itens ${draft.items.length}`],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={tab === id ? styles.tabOn : ""}
+                onClick={() => setTab(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
-          <SelectList
-            title="Profissões"
-            hint={`${draft.roles.length}/${slots}`}
-            options={state.professions.map((p) => ({
-              id: p.id,
-              name: p.name,
-              desc: p.description + (p.hack_found ? " (hack disponível)" : ""),
-            }))}
-            selected={draft.roles}
-            onToggle={(id) => toggleInList("roles", id, slots)}
-          />
+          {tab === "disfarce" && (
+            <SelectList
+              title="Disfarce"
+              hint="escolha 1"
+              options={state.disguises.map((d) => ({ id: d.name, name: d.name, desc: d.description }))}
+              selected={draft.costume ? [draft.costume] : []}
+              onToggle={(name) => set("costume", draft.costume === name ? "" : name)}
+            />
+          )}
 
-          <SelectList
-            title="Hacks"
-            hint={`${draft.hacks.length}/${slots}`}
-            options={state.hacks.map((h) => ({ id: h.id, name: h.name, desc: h.description }))}
-            selected={draft.hacks}
-            onToggle={(id) => toggleInList("hacks", id, slots)}
-          />
+          {tab === "profissoes" && (
+            <SelectList
+              title="Profissões"
+              hint={`${draft.roles.length}/${slots}`}
+              options={state.professions.map((p) => ({
+                id: p.id,
+                name: p.name,
+                desc: p.description + (p.hack_found ? " (hack disponível)" : ""),
+              }))}
+              selected={draft.roles}
+              onToggle={(id) => toggleInList("roles", id, slots)}
+            />
+          )}
 
-          <SelectList
-            title="Itens"
-            hint={`${draft.items.length}/10`}
-            options={state.items.map((i) => ({ id: i.id, name: i.name, desc: itemDesc(i) }))}
-            selected={draft.items}
-            onToggle={(id) => toggleInList("items", id, 10)}
-          />
+          {tab === "hacks" && (
+            <SelectList
+              title="Hacks"
+              hint={`${draft.hacks.length}/${slots}`}
+              options={state.hacks.map((h) => ({ id: h.id, name: h.name, desc: h.description }))}
+              selected={draft.hacks}
+              onToggle={(id) => toggleInList("hacks", id, slots)}
+            />
+          )}
+
+          {tab === "itens" && (
+            <QuantityList
+              title="Itens"
+              hint={`${draft.items.length}/10 tipos`}
+              options={state.items.map((i) => ({
+                id: i.id,
+                name: i.name,
+                desc: itemDesc(i),
+                // armas e acessórios são únicos (máx 1); consumíveis até 9.
+                max: i.category === "item" ? 9 : 1,
+              }))}
+              qtyOf={(id) => draft.items.find((s) => s.id === id)?.qty ?? 0}
+              onSet={setItemQty}
+            />
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+interface QtyOption {
+  id: string;
+  name: string;
+  desc: string;
+  max: number;
+  usable?: boolean;
+}
+
+/** Lista de itens com stepper de quantidade. */
+function QuantityList({
+  title,
+  hint,
+  options,
+  qtyOf,
+  onSet,
+  onUse,
+}: {
+  title: string;
+  hint?: string;
+  options: QtyOption[];
+  qtyOf: (id: string) => number;
+  onSet: (id: string, qty: number) => void;
+  onUse?: (id: string) => void;
+}) {
+  return (
+    <div className={styles.list}>
+      <div className={styles.listHead}>
+        <span className={styles.listTitle}>{title}</span>
+        {hint && <span className={styles.listHint}>{hint}</span>}
+      </div>
+      <div className={styles.rows}>
+        {options.length === 0 && <p className="muted">Nada cadastrado.</p>}
+        {options.map((o) => {
+          const qty = qtyOf(o.id);
+          return (
+            <div key={o.id} className={`${styles.optRow} ${qty > 0 ? styles.optOn : ""}`}>
+              <span className={styles.qtyStepper}>
+                <button
+                  type="button"
+                  disabled={qty <= 0}
+                  onClick={() => onSet(o.id, qty - 1)}
+                >
+                  −
+                </button>
+                <b>{qty}</b>
+                <button
+                  type="button"
+                  disabled={qty >= o.max}
+                  onClick={() => onSet(o.id, qty + 1)}
+                >
+                  +
+                </button>
+              </span>
+              <span className={styles.optBody}>
+                <span className={styles.optName}>{o.name}</span>
+                <span className={styles.optDesc}>{o.desc}</span>
+              </span>
+              {o.usable && qty > 0 && onUse && (
+                <button type="button" className={styles.useBtn} onClick={() => onUse(o.id)}>
+                  usar
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

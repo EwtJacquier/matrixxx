@@ -41,15 +41,31 @@ export interface CatalogItem {
   name: string;
   /** Fórmula de dado+fixo, ex.: "2d6+2" (armas/items usáveis). */
   damage?: string;
-  /** Alcance em casas (distância de Manhattan). Arma corpo a corpo = 1. */
+  /** Alcance MÁXIMO em casas (distância de Manhattan). Arma corpo a corpo = 1. */
   range?: number;
+  /** Alcance MÍNIMO (ausente/1 = pode atacar coladinho). Ex.: fuzil 3-4. */
+  minRange?: number;
   /** Raio de área de efeito a partir do alvo (0/ausente = só o alvo). */
   area?: number;
+  /** Capacidade de munição de uma arma (usos antes de recarregar). 0/ausente = ilimitado. */
+  maxAmmo?: number;
   /** Bônus de defesa (acessório): ignora X de dano. */
   dfBonus?: number;
   /** Bônus de movimento (acessório). */
   mvBonus?: number;
+  /** Consumível (category item): pontos de vida restaurados ao usar. */
+  heal?: number;
+  /** Consumível (category item): melhora o estado em N passos (rumo a Disposto). */
+  improveState?: number;
+  /** Consumível (category item): munição recarregada na arma escolhida ao usar. */
+  ammo?: number;
   description?: string;
+}
+
+/** Entrada de inventário com quantidade. */
+export interface ItemStack {
+  id: string;
+  qty: number;
 }
 
 export interface Hack {
@@ -69,7 +85,9 @@ export interface Npc {
   id: string;
   name: string;
   hp: number;
-  damage?: string; // fórmula dado+fixo (ex.: 1d8+1)
+  /** 1 a 3 armas do catálogo (ids de CatalogItem categoria weapon). */
+  weapons?: string[];
+  damage?: string; // legado: fórmula fixa, usada se não houver armas
   /** nível (0-3): define as cargas de distorção como nos jogadores. */
   level?: 0 | 1 | 2 | 3;
   /** false = NPC neutro (branco); true/ausente = inimigo (vermelho). */
@@ -84,8 +102,18 @@ export interface GameObject {
   name: string;
   /** id de uma regra fixa em OBJECT_RULES. */
   rule: import("./objects").ObjectRuleId;
+  /** valor do modificador (bonus/disadvantage); ausente = default da regra. */
+  value?: number;
+  /** HP do objeto; se definido (>0), pode ser atacado e destruído. */
+  hp?: number;
   /** item concedido ao passar por cima (apenas regra "item"). */
   itemId?: string;
+  /** quantidade de munição recarregada (regra "reload"). */
+  reloadAmount?: number;
+  /** itens concedidos ao abrir (regra "chest"). */
+  grant?: ItemStack[];
+  /** limite de usos da ação (regra action/reload/chest). Ausente = ilimitado. */
+  maxUses?: number;
   /** se true, some do mapa após ser usado uma vez (ex.: a mesa). */
   destroyOnUse?: boolean;
 }
@@ -110,7 +138,7 @@ export interface Character {
   costume: string;
   roles: string[]; // ids de Profession
   hacks: string[]; // ids de Hack
-  items: string[]; // ids de CatalogItem (até 10)
+  items: ItemStack[]; // inventário com quantidades (até 10 tipos)
   state: CharState;
 }
 
@@ -126,13 +154,19 @@ export interface Token {
   maxHp?: number;
   state?: CharState;
   charges?: number; // cargas de distorção disponíveis (jogadores)
+  actedThisTurn?: boolean; // já usou a ação principal neste turno
+  ammo?: Record<string, number>; // munição restante por arma (id -> restante)
   neutral?: boolean; // inimigo neutro (NPC, branco) em vez de hostil (vermelho)
   characterId?: string; // quando kind=player
   npcId?: string; // quando kind=enemy e veio do catálogo de NPCs
-  // object
+  // object (hp/maxHp acima são reutilizados: objeto com hp pode ser atacado)
   rule?: import("./objects").ObjectRuleId; // regra fixa do objeto
+  value?: number; // valor do modificador (override do default da regra)
   objectId?: string; // ref ao objeto do catálogo
   itemId?: string; // item concedido (regra "item")
+  reloadAmount?: number; // munição recarregada (regra "reload")
+  grant?: ItemStack[]; // itens do baú (regra "chest")
+  usesLeft?: number; // usos restantes da ação (regra action/reload/chest)
   destroyOnUse?: boolean; // some do mapa após uso único
 }
 
@@ -147,12 +181,17 @@ export type ActionKind = "attack" | "useItem" | "special";
 export interface ConfirmedAction {
   tokenId: string;
   kind: ActionKind;
+  /** posição encenada de onde a ação é resolvida (sem mover o token de fato). */
+  fromPos?: { x: number; y: number };
   targetId?: string;
   detail?: string;
   /** id do token-objeto quando a ação especial usa um objeto (ex.: chutar mesa). */
   objectId?: string;
   /** cargas de distorção gastas no ataque (+dano). */
   attackCharges?: number;
+  /** consumível usado (kind=useItem): id do item; weaponId se for recarga. */
+  useItemId?: string;
+  reloadWeaponId?: string;
   rollId?: string;
 }
 

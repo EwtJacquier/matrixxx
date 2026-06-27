@@ -73,7 +73,12 @@ export function CatalogAdmin() {
         />
       )}
       {tab === "npcs" && (
-        <NpcForm items={state.npcs} onSave={upsert} onRemove={remove} />
+        <NpcForm
+          items={state.npcs}
+          catalogItems={state.items}
+          onSave={upsert}
+          onRemove={remove}
+        />
       )}
       {tab === "objects" && (
         <ObjectForm
@@ -235,6 +240,7 @@ function ItemForm({
 }) {
   const blank: CatalogItem = { id: uid("itm"), category: "weapon", name: "" };
   const [draft, setDraft] = useState<CatalogItem>(blank);
+  const [listTab, setListTab] = useState<CatalogItem["category"]>("weapon");
 
   return (
     <div className={styles.split}>
@@ -260,7 +266,7 @@ function ItemForm({
           </select>
         </label>
         {draft.category === "weapon" && (
-          <div className={styles.row2}>
+          <>
             <label>
               Dano (ex.: 2d6+2)
               <input
@@ -268,25 +274,45 @@ function ItemForm({
                 onChange={(e) => setDraft({ ...draft, damage: e.target.value })}
               />
             </label>
-            <label>
-              Alcance (casas)
-              <input
-                type="number"
-                min={1}
-                value={draft.range ?? 1}
-                onChange={(e) => setDraft({ ...draft, range: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              Área (raio)
-              <input
-                type="number"
-                min={0}
-                value={draft.area ?? 0}
-                onChange={(e) => setDraft({ ...draft, area: Number(e.target.value) })}
-              />
-            </label>
-          </div>
+            <div className={styles.row2}>
+              <label>
+                Alcance mín.
+                <input
+                  type="number"
+                  min={1}
+                  value={draft.minRange ?? 1}
+                  onChange={(e) => setDraft({ ...draft, minRange: Number(e.target.value) })}
+                />
+              </label>
+              <label>
+                Alcance máx.
+                <input
+                  type="number"
+                  min={1}
+                  value={draft.range ?? 1}
+                  onChange={(e) => setDraft({ ...draft, range: Number(e.target.value) })}
+                />
+              </label>
+              <label>
+                Área (raio)
+                <input
+                  type="number"
+                  min={0}
+                  value={draft.area ?? 0}
+                  onChange={(e) => setDraft({ ...draft, area: Number(e.target.value) })}
+                />
+              </label>
+              <label>
+                Munição
+                <input
+                  type="number"
+                  min={0}
+                  value={draft.maxAmmo ?? 0}
+                  onChange={(e) => setDraft({ ...draft, maxAmmo: Number(e.target.value) })}
+                />
+              </label>
+            </div>
+          </>
         )}
         {draft.category === "accessory" && (
           <div className={styles.row2}>
@@ -328,17 +354,52 @@ function ItemForm({
           <button onClick={() => setDraft({ ...blank, id: uid("itm") })}>Limpar</button>
         </div>
       </div>
-      <List>
-        {items.map((it) => (
-          <Row
-            key={it.id}
-            title={it.name}
-            subtitle={`${it.category}${it.damage ? ` · ${it.damage}` : ""}`}
-            onEdit={() => setDraft(it)}
-            onRemove={() => onRemove(it.id)}
-          />
-        ))}
-      </List>
+      <div>
+        <div className={styles.tabs}>
+          {(
+            [
+              ["weapon", "Armas"],
+              ["accessory", "Acessórios"],
+              ["item", "Itens"],
+            ] as const
+          ).map(([cat, label]) => (
+            <button
+              key={cat}
+              className={listTab === cat ? styles.active : ""}
+              onClick={() => setListTab(cat)}
+            >
+              {label} ({items.filter((i) => i.category === cat).length})
+            </button>
+          ))}
+        </div>
+        <List>
+          {items
+            .filter((it) => it.category === listTab)
+            .map((it) => (
+              <Row
+                key={it.id}
+                title={it.name}
+                subtitle={
+                  it.category === "weapon"
+                    ? `${it.damage ?? "—"} · alc ${
+                        it.minRange && it.minRange > 1
+                          ? `${it.minRange}-${it.range ?? 1}`
+                          : it.range ?? 1
+                      }${it.maxAmmo ? ` · ⦿${it.maxAmmo}` : ""}`
+                    : it.category === "accessory"
+                      ? [it.dfBonus ? `+${it.dfBonus} DF` : "", it.mvBonus ? `${it.mvBonus > 0 ? "+" : ""}${it.mvBonus} MV` : ""].filter(Boolean).join(" ") || "acessório"
+                      : it.heal
+                        ? `cura +${it.heal}`
+                        : it.ammo
+                          ? `munição +${it.ammo}`
+                          : "item"
+                }
+                onEdit={() => setDraft(it)}
+                onRemove={() => onRemove(it.id)}
+              />
+            ))}
+        </List>
+      </div>
     </div>
   );
 }
@@ -346,15 +407,27 @@ function ItemForm({
 // --- Inimigos / NPCs ---
 function NpcForm({
   items,
+  catalogItems,
   onSave,
   onRemove,
 }: {
   items: Npc[];
+  catalogItems: CatalogItem[];
   onSave: (e: Npc) => void;
   onRemove: (id: string) => void;
 }) {
-  const blank: Npc = { id: uid("npc"), name: "", hp: 10, damage: "1d6", description: "" };
+  const blank: Npc = { id: uid("npc"), name: "", hp: 10, weapons: [], description: "" };
   const [draft, setDraft] = useState<Npc>(blank);
+  const weaponList = catalogItems.filter((i) => i.category === "weapon");
+
+  function toggleWeapon(id: string) {
+    setDraft((d) => {
+      const cur = d.weapons ?? [];
+      if (cur.includes(id)) return { ...d, weapons: cur.filter((w) => w !== id) };
+      if (cur.length >= 3) return d; // máximo 3 armas
+      return { ...d, weapons: [...cur, id] };
+    });
+  }
 
   async function pickImage(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -384,13 +457,6 @@ function NpcForm({
             />
           </label>
           <label>
-            Dano (ex.: 2d6+2)
-            <input
-              value={draft.damage ?? ""}
-              onChange={(e) => setDraft({ ...draft, damage: e.target.value })}
-            />
-          </label>
-          <label>
             Nível
             <select
               value={draft.level ?? 0}
@@ -416,6 +482,26 @@ function NpcForm({
             <option value="npc">NPC neutro (branco)</option>
           </select>
         </label>
+        <div className={styles.picker}>
+          <span className={styles.pickerTitle}>
+            Armas ({(draft.weapons ?? []).length}/3)
+          </span>
+          <div className={styles.chips}>
+            {weaponList.map((w) => (
+              <button
+                key={w.id}
+                type="button"
+                title={`${w.damage ?? ""} · alc ${w.range ?? 1}`}
+                className={
+                  (draft.weapons ?? []).includes(w.id) ? styles.chipOn : styles.chip
+                }
+                onClick={() => toggleWeapon(w.id)}
+              >
+                {w.name}
+              </button>
+            ))}
+          </div>
+        </div>
         <label>
           Descrição
           <textarea
@@ -449,7 +535,7 @@ function NpcForm({
           <Row
             key={n.id}
             title={n.name}
-            subtitle={`HP ${n.hp}${n.damage ? ` · ${n.damage}` : ""}`}
+            subtitle={`HP ${n.hp} · ${(n.weapons ?? []).length || (n.damage ? 1 : 0)} arma(s)`}
             onEdit={() => setDraft(n)}
             onRemove={() => onRemove(n.id)}
           />
@@ -539,6 +625,34 @@ function ObjectForm({
           </select>
         </label>
         <p className={styles.ruleDesc}>{rule.description}</p>
+        <div className={styles.row2}>
+          {(rule.kind === "bonus" || rule.kind === "disadvantage") && (
+            <label>
+              Valor ({rule.target === "defense" ? "DEF" : "ATK"}{" "}
+              {rule.kind === "bonus" ? "+" : "-"})
+              <input
+                type="number"
+                min={1}
+                value={draft.value ?? rule.value}
+                onChange={(e) => setDraft({ ...draft, value: Number(e.target.value) })}
+              />
+            </label>
+          )}
+          <label>
+            HP (0 = não atacável)
+            <input
+              type="number"
+              min={0}
+              value={draft.hp ?? 0}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  hp: e.target.value ? Number(e.target.value) : undefined,
+                })
+              }
+            />
+          </label>
+        </div>
         <label className={styles.check}>
           <input
             type="checkbox"
@@ -563,6 +677,67 @@ function ObjectForm({
             </select>
           </label>
         )}
+        {(draft.rule === "reload" || draft.rule === "chest" || draft.rule === "chute") && (
+          <label>
+            Limite de usos (vazio = ilimitado)
+            <input
+              type="number"
+              min={1}
+              value={draft.maxUses ?? ""}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  maxUses: e.target.value ? Number(e.target.value) : undefined,
+                })
+              }
+            />
+          </label>
+        )}
+        {draft.rule === "reload" && (
+          <label>
+            Munição recarregada
+            <input
+              type="number"
+              min={1}
+              value={draft.reloadAmount ?? 2}
+              onChange={(e) => setDraft({ ...draft, reloadAmount: Number(e.target.value) })}
+            />
+          </label>
+        )}
+        {draft.rule === "chest" && (
+          <div className={styles.picker}>
+            <span className={styles.pickerTitle}>Itens do baú</span>
+            <div className={styles.chips}>
+              {catalogItems
+                .filter((i) => i.category === "item")
+                .map((i) => {
+                  const cur = draft.grant?.find((g) => g.id === i.id);
+                  return (
+                    <button
+                      key={i.id}
+                      type="button"
+                      className={cur ? styles.chipOn : styles.chip}
+                      onClick={() =>
+                        setDraft((d) => {
+                          const grant = d.grant ?? [];
+                          const has = grant.find((g) => g.id === i.id);
+                          return {
+                            ...d,
+                            grant: has
+                              ? grant.filter((g) => g.id !== i.id)
+                              : [...grant, { id: i.id, qty: 1 }],
+                          };
+                        })
+                      }
+                    >
+                      {i.name}
+                      {cur ? ` ×${cur.qty}` : ""}
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        )}
         <div className={styles.formBtns}>
           <button
             onClick={() => {
@@ -581,7 +756,9 @@ function ObjectForm({
           <Row
             key={o.id}
             title={o.name}
-            subtitle={`${OBJECT_RULES[o.rule].name} · ${OBJECT_RULES[o.rule].badge}`}
+            subtitle={`${OBJECT_RULES[o.rule].name}${
+              o.value !== undefined ? ` ${o.value}` : ""
+            }${o.hp ? ` · ${o.hp} HP` : ""}`}
             onEdit={() => setDraft(o)}
             onRemove={() => onRemove(o.id)}
           />

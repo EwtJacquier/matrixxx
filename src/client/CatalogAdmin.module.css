@@ -3,6 +3,39 @@
   margin: 0 auto;
 }
 
+.picker {
+  border: 1px solid var(--green-faint);
+  padding: 8px;
+}
+
+.pickerTitle {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--green-dim);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chip,
+.chipOn {
+  padding: 4px 8px;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.chipOn {
+  background: var(--green-faint);
+  border-color: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+
 .admin h2 {
   margin-top: 0;
 }

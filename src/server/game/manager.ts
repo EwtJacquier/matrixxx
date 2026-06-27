@@ -24,6 +24,7 @@ import {
   getScenarios,
   getUsers,
   saveGame,
+  upsert,
 } from "../data/store";
 
 export function buildPublicState(): PublicState {
@@ -92,6 +93,29 @@ function tokenLevel(token: Token): number {
   return 0;
 }
 
+/** Ids de armas que o token possui (ficha do jogador ou NPC do catálogo). */
+function tokenWeaponIds(token: Token): string[] {
+  if (token.characterId) {
+    const ch = getCharacters().find((c) => c.id === token.characterId);
+    return ch?.items.map((s) => s.id) ?? [];
+  }
+  if (token.npcId) {
+    return getNpcs().find((n) => n.id === token.npcId)?.weapons ?? [];
+  }
+  return [];
+}
+
+/** Munição inicial: capacidade cheia de cada arma do token que tenha maxAmmo. */
+function initialAmmo(token: Token): Record<string, number> {
+  const ammo: Record<string, number> = {};
+  const items = getItems();
+  for (const id of tokenWeaponIds(token)) {
+    const w = items.find((i) => i.id === id);
+    if (w?.category === "weapon" && w.maxAmmo) ammo[id] = w.maxAmmo;
+  }
+  return ammo;
+}
+
 /** Regenera as cargas de distorção do ator atual (jogador ou inimigo). */
 function regenCurrentActor(b: BattleState): void {
   const entry = b.initiative[b.turnIndex];
@@ -100,13 +124,18 @@ function regenCurrentActor(b: BattleState): void {
   if (!tok || (tok.kind !== "player" && tok.kind !== "enemy")) return;
   const lvl = tokenLevel(tok);
   tok.charges = Math.min(maxCharges(lvl), (tok.charges ?? 0) + chargeRegen(lvl));
+  // Novo turno do ator: a ação principal volta a ficar disponível.
+  tok.actedThisTurn = false;
 }
 
 export async function startBattle(grid: number, tokens: Token[]): Promise<void> {
   const size = Math.max(4, Math.min(7, Math.round(grid)));
-  // Jogadores e inimigos começam com as cargas cheias do seu nível.
+  // Jogadores e inimigos começam com as cargas cheias do seu nível e munição cheia.
   for (const t of tokens) {
-    if (t.kind === "player" || t.kind === "enemy") t.charges = maxCharges(tokenLevel(t));
+    if (t.kind === "player" || t.kind === "enemy") {
+      t.charges = maxCharges(tokenLevel(t));
+      t.ammo = initialAmmo(t);
+    }
   }
   await mutate((g) => {
     const battle: BattleState = {
@@ -124,6 +153,20 @@ export async function startBattle(grid: number, tokens: Token[]): Promise<void> 
 }
 
 export async function endBattle(): Promise<void> {
+  // Persiste o HP/estado finais dos jogadores de volta nas fichas.
+  const battle = getGame().battle;
+  if (battle) {
+    for (const tok of battle.tokens) {
+      if (tok.kind !== "player" || !tok.characterId) continue;
+      const ch = getCharacters().find((c) => c.id === tok.characterId);
+      if (!ch) continue;
+      await upsert("characters", {
+        ...ch,
+        hp: tok.hp ?? ch.hp,
+        state: tok.state ?? ch.state,
+      });
+    }
+  }
   await mutate((g) => {
     g.battle = null;
     g.mode = "scenario";
@@ -142,6 +185,7 @@ export async function setInitiative(initiative: Initiative[]): Promise<void> {
     g.battle.initiative = [...initiative].sort((a, b) => b.value - a.value);
     g.battle.turnIndex = 0;
     g.battle.turnEndsAt = Date.now() + TURN_DURATION_MS;
+    regenCurrentActor(g.battle);
     g.battle.history = [snapshot(g)];
   });
 }

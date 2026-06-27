@@ -4,7 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useGame } from "./GameProvider";
 import type { ActionKind, Token } from "@/game/types";
 import { STATES } from "@/game/types";
-import { adjacencyMods, ruleOf } from "@/game/objects";
+import { adjacencyMods, isActionRule, objectBadge, ruleOf } from "@/game/objects";
+import { bandLabel, inBand, weaponBand } from "@/game/weapons";
+import { canTarget } from "@/game/faction";
+import { reachableCells } from "@/game/path";
 import { DISTORTION_DMG_PER_CHARGE } from "@/game/rules";
 import styles from "./BattleView.module.css";
 
@@ -63,6 +66,8 @@ export function BattleView() {
   const [actionObjectId, setActionObjectId] = useState<string>("");
   const [moveCharges, setMoveCharges] = useState(0); // cargas gastas no movimento
   const [attackCharges, setAttackCharges] = useState(0); // cargas gastas no ataque
+  const [useItemId, setUseItemId] = useState<string>(""); // consumível escolhido
+  const [reloadWeaponId, setReloadWeaponId] = useState<string>(""); // arma a recarregar
   const [inspectId, setInspectId] = useState<string | null>(null);
 
   // Recomeça o fluxo quando muda o ator/turno.
@@ -71,11 +76,19 @@ export function BattleView() {
     setStagedPos(null);
     setActionKind("attack");
     setTargetId("");
-    setWeaponId("");
+    // weaponId NÃO é resetado: mantém a arma escolhida para a próxima ação.
     setActionObjectId("");
+    setUseItemId("");
+    setReloadWeaponId("");
     setMoveCharges(0);
     setAttackCharges(0);
   }, [currentActor?.id, battle?.turnIndex]);
+
+  // Após usar a ação principal, vai direto para a aba de movimento (só falta mover).
+  const acted = !!currentActor?.actedThisTurn;
+  useEffect(() => {
+    if (acted) setPhase("move");
+  }, [acted]);
 
   if (!battle || !state) return null;
 
@@ -91,64 +104,128 @@ export function BattleView() {
   // Movimento efetivo = base + cargas de distorção alocadas ao movimento.
   const actorMv = baseMv + moveCharges;
 
+  const actorChar = currentActor?.characterId
+    ? state.characters.find((c) => c.id === currentActor.characterId)
+    : null;
+
   const myWeapons = (() => {
-    if (!currentActor?.characterId) return [];
-    const ch = state.characters.find((c) => c.id === currentActor.characterId);
-    if (!ch) return [];
-    return state.items.filter((i) => i.category === "weapon" && ch.items.includes(i.id));
+    if (!currentActor) return [];
+    // Jogador: armas da ficha. Inimigo: armas do NPC do catálogo.
+    let ids: string[] = [];
+    if (actorChar) {
+      ids = actorChar.items.map((s) => s.id);
+    } else if (currentActor.npcId) {
+      const npc = state.npcs.find((n) => n.id === currentActor.npcId);
+      ids = npc?.weapons ?? [];
+    }
+    // Mãos Livres é a opção padrão (valor vazio); não repetir na lista.
+    const uniq = Array.from(new Set(ids));
+    return state.items.filter(
+      (i) => i.category === "weapon" && i.id !== "wpn_maos_livres" && uniq.includes(i.id),
+    );
   })();
 
-  const selectedWeapon = state.items.find((i) => i.id === weaponId);
-  const weaponRange = actionKind === "attack" ? selectedWeapon?.range ?? 1 : 1;
+  // Consumíveis do ator (cura/munição) com quantidade.
+  const myConsumables = (actorChar?.items ?? [])
+    .map((s) => ({ item: state.items.find((i) => i.id === s.id), qty: s.qty }))
+    .filter(
+      (c): c is { item: NonNullable<typeof c.item>; qty: number } =>
+        !!c.item && c.item.category === "item" && (!!c.item.heal || !!c.item.ammo),
+    );
 
-  // Objetos em campo e os adjacentes ao ator (efeitos automáticos e visíveis).
+  // A arma persiste entre turnos; se o ator atual não a possui, cai em mãos livres.
+  const effectiveWeaponId = myWeapons.some((w) => w.id === weaponId) ? weaponId : "";
+  const selectedWeapon = state.items.find((i) => i.id === effectiveWeaponId) ?? null;
+  const weaponRangeBand = weaponBand(selectedWeapon);
+
+  // Posição "de onde o ator vai agir": a casa encenada (staging local) ou a real.
+  // O movimento NÃO é enviado ao servidor até confirmar a ação/encerrar o turno,
+  // então mover e agir são independentes e dá para voltar atrás na movimentação.
+  const fromPos = stagedPos ?? actorPos;
+
+  // Objetos em campo e os adjacentes ao ator (a partir de fromPos).
   const objectsOnBoard = battle.tokens.filter((t) => t.kind === "object");
-  const adjObjects = objectsOnBoard.filter((o) => manhattan(actorPos, o.pos) <= 1);
+  const adjObjects = objectsOnBoard.filter((o) => manhattan(fromPos, o.pos) <= 1);
   // Modificador de ATAQUE que o ator recebe por adjacência a objetos.
-  const adjMod = adjacencyMods({ ...currentActor!, pos: actorPos }, battle.tokens).attack;
+  const adjMod = adjacencyMods({ ...currentActor!, pos: fromPos }, battle.tokens).attack;
   // Objetos com ação especial adjacentes ao ator (ex.: chutar a mesa).
-  const adjActionObjects = adjObjects.filter((o) => ruleOf(o)?.kind === "action");
+  // Objetos acionáveis (chute/recarga/baú) adjacentes, com usos restantes.
+  const adjActionObjects = adjObjects.filter(
+    (o) => isActionRule(ruleOf(o)?.kind) && (o.usesLeft === undefined || o.usesLeft > 0),
+  );
   const hasActionObject = adjActionObjects.length > 0;
   const actionObject = adjActionObjects.find((o) => o.id === actionObjectId) ?? null;
+  const actionObjectRule = actionObject ? ruleOf(actionObject) : null;
 
-  const occupied = (x: number, y: number) =>
-    battle.tokens.some((t) => t.id !== currentActor?.id && t.pos.x === x && t.pos.y === y);
-
-  // Casas alcançáveis no passo de movimento (Manhattan ≤ mv, vazias).
+  // Casas alcançáveis no passo de movimento: BFS contornando tokens não aliados.
+  const reachableSet =
+    phase === "move" && controlsActor && currentActor
+      ? reachableCells(currentActor, battle.tokens, grid, actorMv)
+      : null;
   const reachable = (x: number, y: number) =>
-    phase === "move" &&
-    controlsActor &&
-    manhattan(actorPos, { x, y }) <= actorMv &&
-    !occupied(x, y);
+    !!reachableSet &&
+    // A casa de origem do ator também é "alcançável" (clicar = voltar/ficar parado).
+    (reachableSet.has(`${x},${y}`) ||
+      (!!currentActor && phase === "move" && actorPos.x === x && actorPos.y === y));
 
   // Alvos no passo de ação — NUNCA objetos, apenas jogadores/inimigos.
+  // Só a ação de objeto que causa dano (chute) precisa de alvo.
   const isObjectAction = actionKind === "special" && !!actionObject;
+  const objectNeedsTarget = actionObjectRule?.kind === "action";
   const targets =
-    phase !== "action" || !controlsActor
+    phase !== "action" || !controlsActor || !currentActor
       ? []
-      : isObjectAction && actionObject
-        ? // Ação de objeto (ex.: chutar mesa): alvos em linha reta a partir do objeto.
-          battle.tokens.filter(
-            (t) =>
-              t.id !== currentActor?.id &&
-              (t.kind === "enemy" || t.kind === "player") &&
-              (t.pos.x === actionObject.pos.x || t.pos.y === actionObject.pos.y),
-          )
-        : // Ataque/uso: jogadores/inimigos dentro do alcance.
-          battle.tokens.filter(
-            (t) =>
-              t.id !== currentActor?.id &&
-              (t.kind === "enemy" || t.kind === "player") &&
-              manhattan(actorPos, t.pos) <= weaponRange,
-          );
+      : isObjectAction
+        ? // Objeto: só o chute (action) precisa de alvo, em linha reta.
+          objectNeedsTarget && actionObject
+          ? battle.tokens.filter(
+              (t) =>
+                t.id !== currentActor.id &&
+                canTarget(currentActor, t) &&
+                (t.pos.x === actionObject.pos.x || t.pos.y === actionObject.pos.y),
+            )
+          : []
+        : actionKind === "attack"
+          ? // Ataque: alvos inimigos (facção diferente) dentro da banda de alcance.
+            battle.tokens.filter(
+              (t) =>
+                t.id !== currentActor.id &&
+                canTarget(currentActor, t) &&
+                inBand(manhattan(fromPos, t.pos), weaponRangeBand),
+            )
+          : [];
 
   // Se o alvo escolhido sumiu da lista (ou não há), assume o primeiro automaticamente.
   const effectiveTargetId = targets.some((t) => t.id === targetId)
     ? targetId
     : targets[0]?.id ?? "";
 
+  // Guia de movimentação: alvos atingíveis por QUALQUER arma (banda) a partir de fromPos.
+  // Inclui mãos livres (1) e todas as armas em posse.
+  const myBands = [weaponBand(null), ...myWeapons.map((w) => weaponBand(w))];
+  const moveGuideTargetIds =
+    phase === "move" && controlsActor && currentActor
+      ? new Set(
+          battle.tokens
+            .filter((t) => {
+              if (t.id === currentActor.id || !canTarget(currentActor, t)) return false;
+              const d = manhattan(fromPos, t.pos);
+              return myBands.some((b) => inBand(d, b));
+            })
+            .map((t) => t.id),
+        )
+      : new Set<string>();
+
+  // Posição de exibição: para quem controla, o ator aparece na casa encenada
+  // (local) em ambas as fases; os demais só veem após o commit (confirmar ação).
+  const displayPos = (t: Token) =>
+    controlsActor && stagedPos && t.id === currentActor?.id ? stagedPos : t.pos;
+
   const tokenAt = (x: number, y: number) =>
-    battle.tokens.find((t) => t.pos.x === x && t.pos.y === y);
+    battle.tokens.find((t) => {
+      const p = displayPos(t);
+      return p.x === x && p.y === y;
+    });
 
   const inspected = inspectId ? battle.tokens.find((t) => t.id === inspectId) ?? null : null;
 
@@ -159,71 +236,74 @@ export function BattleView() {
     }
   }
 
+  // Envia o movimento ao servidor (commit) se o ator saiu do lugar.
+  function commitMove() {
+    if (!currentActor) return;
+    if (stagedPos && (stagedPos.x !== actorPos.x || stagedPos.y !== actorPos.y)) {
+      emit("player:moveToken", { tokenId: currentActor.id, pos: stagedPos, moveCharges });
+    }
+  }
+
+  function endTurn() {
+    commitMove();
+    emit("player:endTurn");
+  }
+
+  // Passo 1 → Passo 2 (não envia o movimento ainda; só vai no commit da ação).
   function confirmMove() {
     if (!currentActor || !state) return;
-    const dest = stagedPos ?? actorPos;
-    if (dest.x !== actorPos.x || dest.y !== actorPos.y) {
-      emit("player:moveToken", { tokenId: currentActor.id, pos: dest, moveCharges });
-    } else {
-      // não saiu do lugar → não gasta carga de movimento
-      setMoveCharges(0);
-    }
+    const dest = fromPos;
 
     const enemiesAndAllies = battle!.tokens.filter(
       (t) => t.id !== currentActor.id && (t.kind === "enemy" || t.kind === "player"),
     );
-
-    // Alcance máximo considerando TODAS as armas em posse (+ mãos livres = 1).
-    const maxRange = Math.max(1, ...myWeapons.map((w) => w.range ?? 1));
-    const hasReachableTarget = enemiesAndAllies.some(
-      (t) => manhattan(dest, t.pos) <= maxRange,
+    // Objetos acionáveis adjacentes ao destino (com usos restantes).
+    const adjAction = battle!.tokens.filter(
+      (o) =>
+        isActionRule(ruleOf(o)?.kind) &&
+        manhattan(dest, o.pos) <= 1 &&
+        (o.usesLeft === undefined || o.usesLeft > 0),
     );
+    const usableAction = adjAction.find((o) => {
+      const k = ruleOf(o)?.kind;
+      if (k === "action") {
+        return enemiesAndAllies.some((t) => t.pos.x === o.pos.x || t.pos.y === o.pos.y);
+      }
+      return true; // reload/chest
+    });
 
-    // Objeto de ação adjacente ao destino com algum alvo em linha reta.
-    const actionObjAtDest = battle!.tokens.find(
-      (o) => ruleOf(o)?.kind === "action" && manhattan(dest, o.pos) <= 1,
-    );
-    const actionObjHasTarget =
-      !!actionObjAtDest &&
-      enemiesAndAllies.some(
-        (t) => t.pos.x === actionObjAtDest.pos.x || t.pos.y === actionObjAtDest.pos.y,
-      );
-
-    // Item usável em posse (categoria "item").
-    const actorChar = currentActor.characterId
-      ? state.characters.find((c) => c.id === currentActor.characterId)
-      : null;
-    const hasUsableItem =
-      !!actorChar &&
-      state.items.some(
-        (i) => i.category === "item" && actorChar.items.includes(i.id),
-      );
-
-    // Sem alvo para qualquer arma, sem objeto de ação útil e sem item → encerra o turno.
-    if (!hasReachableTarget && !actionObjHasTarget && !hasUsableItem) {
-      emit("player:endTurn");
-      return;
-    }
-
-    if (actionObjAtDest && actionObjHasTarget) {
+    if (usableAction) {
       setActionKind("special");
-      setActionObjectId(actionObjAtDest.id);
+      setActionObjectId(usableAction.id);
     } else {
       setActionKind("attack");
     }
     setPhase("action");
   }
 
+  // O ator já se movimentou (há um destino encenado diferente da casa atual)?
+  const hasMoved = !!stagedPos && (stagedPos.x !== actorPos.x || stagedPos.y !== actorPos.y);
+
   function confirmAction() {
     if (!currentActor) return;
+    // A ação resolve a partir da casa encenada (fromPos) SEM mover o token; o
+    // movimento é confirmado à parte (e continua reversível até encerrar o turno).
     emit("player:confirmAction", {
       tokenId: currentActor.id,
       kind: actionKind,
+      fromPos,
       targetId: effectiveTargetId || undefined,
-      detail: actionKind === "attack" ? weaponId || undefined : undefined,
+      detail: actionKind === "attack" ? effectiveWeaponId || undefined : undefined,
       objectId: isObjectAction ? actionObjectId : undefined,
+      useItemId: actionKind === "useItem" ? useItemId || undefined : undefined,
+      // recarga: tanto via item de munição (useItem) quanto via objeto de recarga (special)
+      reloadWeaponId: reloadWeaponId || undefined,
       attackCharges,
     });
+    // Só encerra automático se o ator REALMENTE saiu da casa inicial (posição
+    // encenada != posição de início). Se voltou para a casa de origem, hasMoved é
+    // falso e ele pode continuar se movimentando após atacar.
+    if (hasMoved) endTurn();
   }
 
   return (
@@ -252,18 +332,26 @@ export function BattleView() {
             const y = Math.floor(idx / grid);
             const tok = tokenAt(x, y);
             const canReach = reachable(x, y);
-            const isStaged = stagedPos && stagedPos.x === x && stagedPos.y === y;
-            const isActorCell = actorPos.x === x && actorPos.y === y;
-            const isTarget = targets.some((t) => t.pos.x === x && t.pos.y === y);
+            // Casa onde o ator está exibido agora (real ou encenada).
+            const isActorCell = fromPos.x === x && fromPos.y === y && !!currentActor;
+            // Só o alvo efetivamente escolhido recebe a borda animada (ação).
+            const isTarget =
+              phase === "action" &&
+              !!effectiveTargetId &&
+              !!tok &&
+              tok.id === effectiveTargetId;
+            // Guia laranja: alvo atingível por alguma arma durante o movimento.
+            const isGuide =
+              phase === "move" && !!tok && moveGuideTargetIds.has(tok.id);
             return (
               <div
                 key={idx}
                 className={[
                   styles.cell,
                   canReach && !tok ? styles.reach : "",
-                  isStaged ? styles.staged : "",
                   isTarget ? styles.target : "",
-                  isActorCell && currentActor ? styles.actorCell : "",
+                  isGuide ? styles.guide : "",
+                  isActorCell ? styles.actorCell : "",
                 ].join(" ")}
                 onClick={() => clickCell(x, y)}
               >
@@ -271,15 +359,19 @@ export function BattleView() {
                   {String.fromCharCode(65 + x)}
                   {y + 1}
                 </span>
-                {isStaged && phase === "move" && (
-                  <span className={styles.moveHere}>se mover pra cá</span>
-                )}
                 {tok && (
                   <TokenChip
                     token={tok}
                     tokens={battle.tokens}
                     active={tok.id === currentActor?.id}
-                    onInspect={isGM ? () => setInspectId(tok.id) : undefined}
+                    onInspect={
+                      // Na fase de mover, clicar no próprio ator escolhe "ficar aqui"
+                      // em vez de abrir o inspetor.
+                      isGM &&
+                      !(phase === "move" && controlsActor && tok.id === currentActor?.id)
+                        ? () => setInspectId(tok.id)
+                        : undefined
+                    }
                   />
                 )}
               </div>
@@ -311,11 +403,33 @@ export function BattleView() {
           <div className={styles.actionPanel}>
             <h3>Turno: {currentActor.label}</h3>
 
+            {/* Escolha livre entre movimentar e agir (em qualquer ordem). Após usar a
+                ação principal, sobra só o movimento (a aba de ação some). */}
+            {!acted && (
+              <div className={styles.turnTabs}>
+                <button
+                  type="button"
+                  className={phase === "move" ? styles.turnTabOn : ""}
+                  onClick={() => setPhase("move")}
+                >
+                  Movimentar
+                </button>
+                <button
+                  type="button"
+                  className={phase === "action" ? styles.turnTabOn : ""}
+                  onClick={confirmMove}
+                >
+                  Ação principal
+                </button>
+              </div>
+            )}
+
             {phase === "move" ? (
               <>
                 <p className="muted">
-                  Passo 1 — mover. Escolha uma casa destacada (mv {actorMv}) e confirme.
-                  Diagonal custa 2.
+                  Mover (mv {actorMv}) — escolha uma casa destacada. Você pode mover
+                  antes ou depois de agir; o movimento é reversível.
+                  {acted ? " Ação já usada." : ""}
                 </p>
                 <p className={styles.staticHint}>
                   destino:{" "}
@@ -356,16 +470,28 @@ export function BattleView() {
                   <p className={styles.chargeNote}>cada carga = +1 casa de movimento</p>
                 </div>
 
-                <button className={styles.confirm} onClick={confirmMove}>
-                  Confirmar movimento ▶
-                </button>
-                <button className={styles.endTurn} onClick={() => emit("player:endTurn")}>
-                  Encerrar turno sem agir
-                </button>
+                {acted ? (
+                  <button className={styles.confirm} onClick={endTurn}>
+                    {hasMoved ? "Confirmar movimento e encerrar ▶" : "Encerrar turno ▶"}
+                  </button>
+                ) : (
+                  <>
+                    <button className={styles.confirm} onClick={confirmMove}>
+                      Ação principal ▶
+                    </button>
+                    <button className={styles.endTurn} onClick={endTurn}>
+                      Encerrar turno
+                    </button>
+                  </>
+                )}
               </>
             ) : (
               <>
-                <p className="muted">Passo 2 — escolha sua ação.</p>
+                <p className="muted">
+                  {acted
+                    ? "Ação já usada — você ainda pode movimentar."
+                    : "Escolha sua ação."}
+                </p>
 
                 {adjMod !== 0 && (
                   <p className={styles.staticHint}>
@@ -392,24 +518,53 @@ export function BattleView() {
                 </label>
 
                 {actionKind === "attack" && (
-                  <label>
-                    Arma
-                    <select
-                      value={weaponId}
-                      onChange={(e) => {
-                        setWeaponId(e.target.value);
+                  <div className={styles.weaponList}>
+                    <button
+                      type="button"
+                      className={`${styles.weaponRow} ${
+                        effectiveWeaponId === "" ? styles.weaponOn : ""
+                      }`}
+                      onClick={() => {
+                        setWeaponId("");
                         setTargetId("");
                       }}
                     >
-                      <option value="">Mãos Livres (1d4 · alc 1)</option>
-                      {myWeapons.map((w) => (
-                        <option key={w.id} value={w.id}>
-                          {w.name} ({w.damage} · alc {w.range ?? 1}
-                          {w.area ? ` · área ${w.area}` : ""})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      <span className={styles.weaponName}>Mãos Livres</span>
+                      <span className={styles.weaponMeta}>1d4 · alc 1</span>
+                    </button>
+                    {myWeapons.map((w) => {
+                      const ammoLeft = w.maxAmmo
+                        ? currentActor.ammo?.[w.id] ?? 0
+                        : null;
+                      const empty = ammoLeft !== null && ammoLeft <= 0;
+                      return (
+                        <button
+                          key={w.id}
+                          type="button"
+                          disabled={empty}
+                          className={`${styles.weaponRow} ${
+                            effectiveWeaponId === w.id ? styles.weaponOn : ""
+                          }`}
+                          onClick={() => {
+                            setWeaponId(w.id);
+                            setTargetId("");
+                          }}
+                        >
+                          <span className={styles.weaponName}>{w.name}</span>
+                          <span className={styles.weaponMeta}>
+                            {w.damage} · alc {bandLabel(weaponBand(w))}
+                            {w.area ? ` · área ${w.area}` : ""}
+                            {ammoLeft !== null
+                              ? ` · ⦿ ${ammoLeft}/${w.maxAmmo}${empty ? " (vazio)" : ""}`
+                              : ""}
+                          </span>
+                          {w.description && (
+                            <span className={styles.weaponDesc}>{w.description}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
                 )}
 
                 {actionKind === "special" && (
@@ -420,12 +575,14 @@ export function BattleView() {
                       onChange={(e) => {
                         setActionObjectId(e.target.value);
                         setTargetId("");
+                        setReloadWeaponId("");
                       }}
                     >
-                      <option value="">— ação livre —</option>
+                      <option value="">— escolha o objeto —</option>
                       {adjActionObjects.map((o) => (
                         <option key={o.id} value={o.id}>
-                          {o.label} ({ruleOf(o)?.damage})
+                          {o.label} [{ruleOf(o)?.badge}]
+                          {o.usesLeft !== undefined ? ` · ${o.usesLeft} uso(s)` : ""}
                         </option>
                       ))}
                     </select>
@@ -434,61 +591,154 @@ export function BattleView() {
                 {actionObject && (
                   <p className={styles.staticHint}>{ruleOf(actionObject)?.description}</p>
                 )}
+                {/* Recarga via objeto: escolher a arma. */}
+                {actionKind === "special" &&
+                  actionObjectRule?.kind === "reload" &&
+                  myWeapons.some((w) => w.maxAmmo) && (
+                    <label>
+                      Recarregar
+                      <select
+                        value={reloadWeaponId}
+                        onChange={(e) => setReloadWeaponId(e.target.value)}
+                      >
+                        <option value="">— escolha a arma —</option>
+                        {myWeapons
+                          .filter((w) => w.maxAmmo)
+                          .map((w) => (
+                            <option key={w.id} value={w.id}>
+                              {w.name} (⦿ {currentActor.ammo?.[w.id] ?? 0}/{w.maxAmmo})
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                  )}
+                {/* Baú: lista o que será recebido. */}
+                {actionKind === "special" &&
+                  actionObjectRule?.kind === "chest" &&
+                  actionObject?.grant?.length && (
+                    <p className={styles.staticHint}>
+                      Recebe:{" "}
+                      {actionObject.grant
+                        .map(
+                          (g) =>
+                            `${state.items.find((i) => i.id === g.id)?.name ?? g.id} ×${g.qty}`,
+                        )
+                        .join(", ")}
+                    </p>
+                  )}
 
-                <label>
-                  Alvo (alcance {weaponRange})
-                  <select
-                    value={effectiveTargetId}
-                    onChange={(e) => setTargetId(e.target.value)}
-                  >
-                    {targets.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.label} ({String.fromCharCode(65 + t.pos.x)}
-                        {t.pos.y + 1}) · {t.hp}/{t.maxHp} HP · {t.state}
-                      </option>
+                {actionKind === "useItem" ? (
+                  <div className={styles.weaponList}>
+                    {myConsumables.length === 0 && (
+                      <p className={styles.staticHint}>Nenhum consumível.</p>
+                    )}
+                    {myConsumables.map(({ item, qty }) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`${styles.weaponRow} ${
+                          useItemId === item.id ? styles.weaponOn : ""
+                        }`}
+                        onClick={() => setUseItemId(item.id)}
+                      >
+                        <span className={styles.weaponName}>
+                          {item.name} ×{qty}
+                        </span>
+                        <span className={styles.weaponMeta}>
+                          {item.heal ? `cura +${item.heal} HP` : ""}
+                          {item.heal && item.improveState ? " · melhora estado" : ""}
+                          {item.ammo ? `munição +${item.ammo}` : ""}
+                        </span>
+                        {item.description && (
+                          <span className={styles.weaponDesc}>{item.description}</span>
+                        )}
+                      </button>
                     ))}
-                  </select>
-                </label>
-                {targets.length === 0 && (
-                  <p className={styles.staticHint}>nenhum alvo no alcance</p>
+                    {/* Munição: escolher arma a recarregar. */}
+                    {useItemId &&
+                      state.items.find((i) => i.id === useItemId)?.ammo &&
+                      myWeapons.some((w) => w.maxAmmo) && (
+                        <label>
+                          Recarregar
+                          <select
+                            value={reloadWeaponId}
+                            onChange={(e) => setReloadWeaponId(e.target.value)}
+                          >
+                            <option value="">— escolha a arma —</option>
+                            {myWeapons
+                              .filter((w) => w.maxAmmo)
+                              .map((w) => (
+                                <option key={w.id} value={w.id}>
+                                  {w.name} (⦿ {currentActor.ammo?.[w.id] ?? 0}/{w.maxAmmo})
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                      )}
+                  </div>
+                ) : (
+                  <>
+                    <label>
+                      Alvo (alcance {bandLabel(weaponRangeBand)})
+                      <select
+                        value={effectiveTargetId}
+                        onChange={(e) => setTargetId(e.target.value)}
+                      >
+                        {targets.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.label} ({String.fromCharCode(65 + t.pos.x)}
+                            {t.pos.y + 1}) · {t.hp}/{t.maxHp} HP
+                            {t.kind === "object" ? " · objeto" : ` · ${t.state}`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {targets.length === 0 && (
+                      <p className={styles.staticHint}>nenhum alvo no alcance</p>
+                    )}
+
+                    <div className={styles.charges}>
+                      <div className={styles.chargeHead}>
+                        <span>Distorção: ataque</span>
+                        <span className={styles.chargeCount}>
+                          {availableCharges - attackCharges}/{availableCharges} cargas
+                        </span>
+                      </div>
+                      <div className={styles.stepper}>
+                        <button
+                          type="button"
+                          disabled={attackCharges <= 0}
+                          onClick={() => setAttackCharges((c) => Math.max(0, c - 1))}
+                        >
+                          −
+                        </button>
+                        <span className={styles.dmgPlus}>
+                          +{attackCharges * DISTORTION_DMG_PER_CHARGE} dano
+                        </span>
+                        <button
+                          type="button"
+                          disabled={attackCharges >= availableCharges}
+                          onClick={() => setAttackCharges((c) => c + 1)}
+                        >
+                          +
+                        </button>
+                      </div>
+                      <p className={styles.chargeNote}>
+                        cada carga = +{DISTORTION_DMG_PER_CHARGE} de dano
+                      </p>
+                    </div>
+                  </>
                 )}
 
-                <div className={styles.charges}>
-                  <div className={styles.chargeHead}>
-                    <span>Distorção: ataque</span>
-                    <span className={styles.chargeCount}>
-                      {availableCharges - attackCharges}/{availableCharges} cargas
-                    </span>
-                  </div>
-                  <div className={styles.stepper}>
-                    <button
-                      type="button"
-                      disabled={attackCharges <= 0}
-                      onClick={() => setAttackCharges((c) => Math.max(0, c - 1))}
-                    >
-                      −
-                    </button>
-                    <span className={styles.dmgPlus}>
-                      +{attackCharges * DISTORTION_DMG_PER_CHARGE} dano
-                    </span>
-                    <button
-                      type="button"
-                      disabled={attackCharges >= availableCharges}
-                      onClick={() => setAttackCharges((c) => c + 1)}
-                    >
-                      +
-                    </button>
-                  </div>
-                  <p className={styles.chargeNote}>
-                    cada carga = +{DISTORTION_DMG_PER_CHARGE} de dano
-                  </p>
-                </div>
-
-                <button className={styles.confirm} onClick={confirmAction}>
-                  Confirmar ação (sem volta)
+                <button
+                  className={styles.confirm}
+                  onClick={confirmAction}
+                  disabled={acted}
+                >
+                  {acted ? "Ação já usada" : "Confirmar ação (sem volta)"}
                 </button>
-                <button className={styles.endTurn} onClick={() => emit("player:endTurn")}>
-                  Encerrar turno sem agir
+                <button className={styles.endTurn} onClick={endTurn}>
+                  Encerrar turno
                 </button>
               </>
             )}
@@ -507,7 +757,8 @@ export function BattleView() {
                     <span className={styles.objName}>
                       {o.label} ({String.fromCharCode(65 + o.pos.x)}
                       {o.pos.y + 1})
-                      {rule ? ` · ${rule.badge}` : ""}
+                      {rule ? ` · ${objectBadge(o)}` : ""}
+                      {o.hp !== undefined ? ` · ${o.hp} HP` : ""}
                       {near ? " ◀ adjacente" : ""}
                     </span>
                     <span className={styles.objEffect}>{rule?.description}</span>
@@ -532,23 +783,34 @@ export function BattleView() {
           </ol>
         </div>
 
-        {isGM && (
-          <div className={styles.gmControls}>
-            <h3>GM</h3>
-            <p className="muted">clique num token para inspecionar.</p>
-            <div className={styles.turnBtns}>
-              <button onClick={() => emit("gm:advanceTurn", { dir: -1 })}>◀ turno</button>
-              <button onClick={() => emit("gm:advanceTurn", { dir: 1 })}>turno ▶</button>
-            </div>
-            <button className="danger" onClick={() => emit("gm:endBattle")}>
-              Encerrar batalha
-            </button>
-          </div>
-        )}
       </aside>
 
       <div className={styles.log}>
-        <h3 className={styles.logTitle}>Histórico</h3>
+        <div className={styles.logHeader}>
+          <h3 className={styles.logTitle}>Histórico</h3>
+          {isGM && (
+            <div className={styles.logActions}>
+              <button
+                className={styles.logLink}
+                onClick={() => emit("gm:advanceTurn", { dir: -1 })}
+              >
+                ◀ turno
+              </button>
+              <button
+                className={styles.logLink}
+                onClick={() => emit("gm:advanceTurn", { dir: 1 })}
+              >
+                turno ▶
+              </button>
+              <button
+                className={`${styles.logLink} ${styles.logLinkDanger}`}
+                onClick={() => emit("gm:endBattle")}
+              >
+                encerrar combate
+              </button>
+            </div>
+          )}
+        </div>
         <div className={styles.logBody}>
           {battle.log.map((l, i) => (
             <div key={i} className={styles.logLine}>
@@ -600,6 +862,11 @@ function TokenChip({
           {token.hp}/{token.maxHp}
         </span>
       )}
+      {token.kind === "object" && token.hp !== undefined && (
+        <span className={styles.chipHp}>
+          {token.hp}/{token.maxHp} HP
+        </span>
+      )}
       {(token.kind === "enemy" || token.kind === "player") && token.state && (
         <span className={`${styles.chipState} ${styles["st" + stateIdx]}`}>
           {token.state}
@@ -609,7 +876,7 @@ function TokenChip({
         <span className={styles.chipCharges}>⚡{token.charges}</span>
       )}
       {token.kind === "object" && rule && (
-        <span className={styles.chipBadge}>{rule.badge}</span>
+        <span className={styles.chipBadge}>{objectBadge(token)}</span>
       )}
       {badges.length > 0 && (
         <span className={styles.chipMods}>
@@ -709,7 +976,10 @@ function TokenInspector({
               <dt>itens</dt>
               <dd>
                 {ch.items
-                  .map((id) => state.items.find((i) => i.id === id)?.name)
+                  .map((s) => {
+                    const name = state.items.find((i) => i.id === s.id)?.name;
+                    return name ? (s.qty > 1 ? `${name} ×${s.qty}` : name) : null;
+                  })
                   .filter(Boolean)
                   .join(", ") || "—"}
               </dd>

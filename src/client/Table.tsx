@@ -45,27 +45,26 @@ export function Table() {
       <header className={styles.header}>
         <span className={styles.brand}>MATRIX // mesa</span>
         <nav className={styles.nav}>
-          <button
-            className={view === "table" ? styles.active : ""}
-            onClick={() => setView("table")}
-          >
-            Mesa
-          </button>
-          {!isGM && (
-            <button
-              className={view === "sheet" ? styles.active : ""}
-              onClick={() => setView("sheet")}
-            >
-              Ficha
-            </button>
-          )}
+          {/* GM tem Mesa + Cadastros. Jogador usa "ver ficha" no próprio card;
+              o botão Mesa só aparece para voltar quando está na ficha. */}
           {isGM && (
-            <button
-              className={view === "catalog" ? styles.active : ""}
-              onClick={() => setView("catalog")}
-            >
-              Cadastros
-            </button>
+            <>
+              <button
+                className={view === "table" ? styles.active : ""}
+                onClick={() => setView("table")}
+              >
+                Mesa
+              </button>
+              <button
+                className={view === "catalog" ? styles.active : ""}
+                onClick={() => setView("catalog")}
+              >
+                Cadastros
+              </button>
+            </>
+          )}
+          {!isGM && view === "sheet" && (
+            <button onClick={() => setView("table")}>← Mesa</button>
           )}
         </nav>
         <span className={styles.status}>
@@ -83,7 +82,11 @@ export function Table() {
         {view === "catalog" && isGM && <CatalogAdmin />}
         {view === "sheet" && !isGM && <CharacterSheet />}
         {view === "table" &&
-          (inBattle ? <BattleView /> : <ScenarioView />)}
+          (inBattle ? (
+            <BattleView />
+          ) : (
+            <ScenarioView onOpenSheet={() => setView("sheet")} />
+          ))}
       </main>
     </div>
   );

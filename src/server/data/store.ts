@@ -136,6 +136,12 @@ export async function initStore(): Promise<void> {
     readCollection("battleTemplates"),
     readCollection("game"),
   ]);
+  // Migra fichas antigas: items string[] -> ItemStack[].
+  for (const ch of characters) {
+    if (Array.isArray(ch.items) && ch.items.some((x) => typeof x === "string")) {
+      ch.items = (ch.items as unknown as string[]).map((id) => ({ id, qty: 1 }));
+    }
+  }
   cache = {
     users,
     characters,

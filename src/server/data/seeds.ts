@@ -12,9 +12,9 @@ import type {
 } from "@/game/types";
 
 export const PROFESSIONS: Profession[] = [
-  { id: "prof_pugilista", name: "Pugilista", hack_found: true, description: "Você sabe lutar boxe, causa 2 de dano de contusão no combate a mãos livres" },
+  { id: "prof_pugilista", name: "Pugilista", hack_found: true, description: "Você sabe lutar boxe; causa +2 de dano no combate a mãos livres" },
   { id: "prof_hacker", name: "Hacker", hack_found: false, description: "Você sabe hackear equipamentos para conseguir informações" },
-  { id: "prof_soldado", name: "Soldado", hack_found: false, description: "Você diminui a defesa do inimigo em -1 em testes com armas de fogo" },
+  { id: "prof_soldado", name: "Soldado", hack_found: false, description: "Você é treinado com armas de fogo; +1 de dano ao atacar com elas" },
   { id: "prof_atleta", name: "Atleta", hack_found: true, description: "Você recebe +2 em testes para corridas e acrobacias" },
   { id: "prof_artista", name: "Artista", hack_found: false, description: "Você sabe fazer performances artísticas" },
   { id: "prof_aviador", name: "Aviador", hack_found: false, description: "Você sabe pilotar aviões e helicópteros" },
@@ -38,15 +38,18 @@ export const ITEMS: CatalogItem[] = [
   { id: "wpn_taco", category: "weapon", name: "Taco / Bastão", damage: "1d6", range: 1 },
   { id: "wpn_faca", category: "weapon", name: "Faca / Canivete", damage: "1d6", range: 1 },
   { id: "wpn_katana", category: "weapon", name: "Katana", damage: "2d6", range: 1 },
-  { id: "wpn_revolver", category: "weapon", name: "Revolver", damage: "1d8", range: 4 },
-  { id: "wpn_metralhadora", category: "weapon", name: "Metralhadora", damage: "2d8", range: 5, area: 1, description: "Rajada: atinge também os adjacentes ao alvo." },
-  { id: "wpn_fuzil", category: "weapon", name: "Fuzil / 12", damage: "2d10", range: 6 },
-  { id: "wpn_granada", category: "weapon", name: "Granada", damage: "3d6", range: 4, area: 2, description: "Explosão em área: dano a todos num raio de 2 casas do alvo." },
+  { id: "wpn_revolver", category: "weapon", name: "Revolver", damage: "1d8", minRange: 3, range: 4, maxAmmo: 3, description: "Arma de fogo. Alcance 3-4 (não atira coladinho). 3 tiros." },
+  { id: "wpn_metralhadora", category: "weapon", name: "Metralhadora", damage: "2d8", minRange: 3, range: 4, area: 1, maxAmmo: 2, description: "Rajada: atinge adjacentes ao alvo. Alcance 3-4. Só 2 tiros." },
+  { id: "wpn_fuzil", category: "weapon", name: "Fuzil", damage: "2d10", minRange: 3, range: 4, maxAmmo: 2, description: "Arma de fogo pesada. Alcance 3-4. Só 2 tiros." },
+  { id: "wpn_espingarda", category: "weapon", name: "Espingarda .12", damage: "2d8", minRange: 1, range: 2, maxAmmo: 1, description: "Curto alcance (1-2), poderosa. Só 1 cartucho." },
+  { id: "wpn_granada", category: "weapon", name: "Granada", damage: "3d6", minRange: 3, range: 4, area: 2, maxAmmo: 1, description: "Explosão em área (raio 2). Alcance 3-4. Uso único." },
   // Acessórios
   { id: "acc_colete", category: "accessory", name: "Colete", dfBonus: 2, description: "Ignora 2 de dano." },
   { id: "acc_escudo", category: "accessory", name: "Escudo Policial", dfBonus: 3, mvBonus: -1, description: "Ignora 3 de dano, reduz 1 de movimento." },
-  // Items usáveis
-  { id: "itm_pente", category: "item", name: "Pente de Bala", description: "Recarrega uma arma de fogo." },
+  // Consumíveis (usáveis em combate e fora dele)
+  { id: "itm_municao", category: "item", name: "Munição", ammo: 2, description: "Recarrega +2 de munição na arma escolhida." },
+  { id: "itm_medkit", category: "item", name: "Kit Médico", heal: 20, improveState: 1, description: "Restaura 20 de HP e melhora 1 estado (se necessário)." },
+  { id: "itm_estim", category: "item", name: "Estimulante", heal: 8, description: "Restaura 8 de HP." },
 ];
 
 export const HACKS: Hack[] = [
@@ -74,12 +77,14 @@ export const DISGUISES: Disguise[] = [
 ];
 
 export const OBJECTS: GameObject[] = [
-  { id: "obj_cobertura", name: "Coluna de Cobertura", rule: "cobertura" },
-  { id: "obj_barricada", name: "Barricada", rule: "cobertura" },
-  { id: "obj_municao", name: "Caixa de Munição", rule: "reforco" },
+  { id: "obj_cobertura", name: "Coluna de Cobertura", rule: "cobertura", hp: 20 },
+  { id: "obj_barricada", name: "Barricada", rule: "cobertura", hp: 12 },
+  { id: "obj_reforco", name: "Posto de Tiro", rule: "reforco" },
   { id: "obj_oleo", name: "Poça de Óleo", rule: "atrapalho" },
   { id: "obj_mesa", name: "Mesa de Metal", rule: "chute", destroyOnUse: true },
-  { id: "obj_suprimentos", name: "Caixa de Suprimentos", rule: "item", itemId: "itm_pente" },
+  { id: "obj_municao", name: "Caixa de Munição", rule: "reload", reloadAmount: 4, maxUses: 2 },
+  { id: "obj_bau", name: "Baú de Suprimentos", rule: "chest", maxUses: 1, grant: [{ id: "itm_medkit", qty: 1 }, { id: "itm_municao", qty: 2 }] },
+  { id: "obj_suprimentos", name: "Caixa de Suprimentos", rule: "item", itemId: "itm_municao" },
 ];
 
 export const BATTLE_TEMPLATES: BattleTemplate[] = [
@@ -96,11 +101,11 @@ export const BATTLE_TEMPLATES: BattleTemplate[] = [
 ];
 
 export const NPCS: Npc[] = [
-  { id: "npc_agente", name: "Agente", hp: 30, damage: "2d6+2", level: 3, description: "Sentinela do Sistema. Forte, preciso e implacável." },
-  { id: "npc_policial", name: "Policial", hp: 15, damage: "1d8", level: 1, description: "Força da lei comum, controlada pela Matrix." },
-  { id: "npc_capanga", name: "Capanga", hp: 12, damage: "1d6", level: 1, description: "Brutamontes de aluguel armado com bastão." },
-  { id: "npc_cao", name: "Cão de Guarda", hp: 8, damage: "1d6+1", level: 0, description: "Rápido e agressivo; ataca em grupo." },
-  { id: "npc_civil", name: "Civil", hp: 6, damage: "1d4", level: 0, hostile: false, description: "Pessoa comum; pode virar Agente a qualquer momento." },
+  { id: "npc_agente", name: "Agente", hp: 30, weapons: ["wpn_revolver", "wpn_maos_livres"], level: 3, description: "Sentinela do Sistema. Forte, preciso e implacável." },
+  { id: "npc_policial", name: "Policial", hp: 15, weapons: ["wpn_revolver", "wpn_taco"], level: 1, description: "Força da lei comum, controlada pela Matrix." },
+  { id: "npc_capanga", name: "Capanga", hp: 12, weapons: ["wpn_taco"], level: 1, description: "Brutamontes de aluguel armado com bastão." },
+  { id: "npc_cao", name: "Cão de Guarda", hp: 8, weapons: ["wpn_maos_livres"], level: 0, description: "Rápido e agressivo; ataca em grupo." },
+  { id: "npc_civil", name: "Civil", hp: 6, weapons: ["wpn_maos_livres"], level: 0, hostile: false, description: "Pessoa comum; pode virar Agente a qualquer momento." },
 ];
 
 export const SCENARIOS: Scenario[] = [

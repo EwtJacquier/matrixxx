@@ -19,8 +19,12 @@ import type {
   Token,
 } from "@/game/types";
 import { adjacencyMods, ruleOf } from "@/game/objects";
+import { canTarget } from "@/game/faction";
+import { inBand, weaponBand } from "@/game/weapons";
+import { adjustItem, itemQty } from "@/game/inventory";
+import { canReachCell } from "@/game/path";
 import { roll } from "@/game/dice";
-import { DISTORTION_DMG_PER_CHARGE, applyDamage, clampDistortion } from "@/game/rules";
+import { DISTORTION_DMG_PER_CHARGE, applyDamage, clampDistortion, improveState } from "@/game/rules";
 import { SESSION_COOKIE, verifyToken } from "../auth/session";
 import { getUserById } from "../auth/users";
 import {
@@ -211,7 +215,10 @@ export function registerSocket(io: IOServer): void {
         // Cargas de distorção estendem o movimento em +1 casa cada.
         const spend = Math.max(0, Math.min(moveCharges, tok.charges ?? 0));
         const mv = baseMv(tok) + spend;
-        if (manhattanT(tok.pos, pos) > mv) return fail("Fora do alcance de movimento.");
+        // Caminho contornando tokens não aliados (não atravessa bloqueados).
+        if (!canReachCell(tok, pos, b.tokens, b.grid, mv)) {
+          return fail("Fora do alcance de movimento.");
+        }
         tok.pos = pos;
         if (spend > 0) {
           tok.charges = (tok.charges ?? 0) - spend;
@@ -230,6 +237,11 @@ export function registerSocket(io: IOServer): void {
       const actor = b.tokens.find((t) => t.id === action.tokenId);
       if (!actor) return fail("Token inexistente.");
       if (!canControl(actor)) return fail("Você não controla esse token.");
+      if (actor.actedThisTurn) return fail("Você já usou sua ação principal neste turno.");
+
+      // Posição de onde a ação é resolvida (encenada pelo cliente); o token NÃO é
+      // movido aqui — o movimento é confirmado à parte (e é reversível).
+      const actPos = action.fromPos ?? actor.pos;
 
       let r: Roll | null = null;
       const damages: { tokenId: string; amount: number; pos: { x: number; y: number }; notes?: string[] }[] = [];
@@ -237,26 +249,37 @@ export function registerSocket(io: IOServer): void {
       const charges = Math.max(0, Math.min(action.attackCharges ?? 0, actor.charges ?? 0));
       const distBonus = charges * DISTORTION_DMG_PER_CHARGE;
 
-      // Modificador de ATAQUE do ator por objetos adjacentes (ex.: Reforço +1).
-      const atkMod = adjacencyMods(actor, b.tokens).attack;
+      // Modificador de ATAQUE do ator por objetos adjacentes, a partir de actPos.
+      const atkMod = adjacencyMods({ ...actor, pos: actPos }, b.tokens).attack;
 
       const damageToken = (target: Token, base: number) => {
+        // Objeto destrutível (com HP): dano direto, sem defesa/estado.
+        if (target.kind === "object") {
+          if ((target.hp ?? 0) <= 0) return null;
+          const dmg = Math.max(0, base);
+          target.hp = Math.max(0, (target.hp ?? 0) - dmg);
+          damages.push({ tokenId: target.id, amount: dmg, pos: { ...target.pos } });
+          return dmg;
+        }
         if (target.kind !== "enemy" && target.kind !== "player") return null;
-        // Defesa do alvo por objetos adjacentes (ex.: Cobertura +1 → -1 de dano).
-        const def = adjacencyMods(target, b.tokens).defense;
-        const dmg = Math.max(0, base - def);
+        // Defesa do alvo: acessórios equipados (ficha) + objetos adjacentes (Cobertura).
+        const gearDf = tokenDf(target);
+        const adjDef = adjacencyMods(target, b.tokens).defense;
+        const totalDf = gearDf + adjDef;
+        // applyDamage subtrai o df antes de aplicar; passamos a defesa total.
         const res = applyDamage(
           target.hp ?? 0,
           target.maxHp ?? 1,
           target.state ?? "Disposto",
-          dmg,
-          0,
+          base,
+          totalDf,
         );
+        const dmg = res.applied; // dano real após defesa e penalidade de estado
         target.hp = res.hp;
         target.state = res.state;
         const notes: string[] = [];
         if (atkMod) notes.push(`ATK ${atkMod > 0 ? "+" : ""}${atkMod}`);
-        if (def) notes.push(`DEF +${def}`);
+        if (totalDf) notes.push(`DEF ${totalDf}`);
         damages.push({
           tokenId: target.id,
           amount: dmg,
@@ -270,18 +293,35 @@ export function registerSocket(io: IOServer): void {
       const consumed: string[] = [];
 
       if (action.kind === "attack") {
+        const weaponId = action.detail;
+        const weapon = weaponId ? getItems().find((i) => i.id === weaponId) ?? null : null;
+        // Munição: se a arma tem capacidade, precisa de munição carregada.
+        if (weapon?.maxAmmo && weaponId) {
+          const left = actor.ammo?.[weaponId] ?? 0;
+          if (left <= 0) {
+            return fail(`${weapon.name} sem munição — recarregue com um item de munição.`);
+          }
+        }
+        const target = b.tokens.find((t) => t.id === action.targetId);
+        // Valida a banda de alcance da arma (a partir de actPos).
+        if (target && !inBand(manhattanT(actPos, target.pos), weaponBand(weapon))) {
+          return fail("Alvo fora do alcance da arma.");
+        }
         const formula = resolveWeaponFormula(actor, action.detail);
         r = roll(formula, actor.label, "Ataque");
-        const target = b.tokens.find((t) => t.id === action.targetId);
-        if (target) {
-          const base = Math.max(0, r.total + distBonus + atkMod);
-          const weapon = action.detail ? getItems().find((i) => i.id === action.detail) : null;
+        if (target && canTarget(actor, target)) {
+          // consome 1 de munição
+          if (weapon?.maxAmmo && weaponId) {
+            actor.ammo = { ...(actor.ammo ?? {}), [weaponId]: (actor.ammo?.[weaponId] ?? 0) - 1 };
+          }
+          const prof = professionDamageBonus(actor, weapon);
+          const base = Math.max(0, r.total + distBonus + atkMod + prof.bonus);
           const area = weapon?.area ?? 0;
           const affected = area
             ? b.tokens.filter(
                 (t) =>
                   t.id !== actor.id &&
-                  (t.kind === "enemy" || t.kind === "player") &&
+                  canTarget(actor, t) &&
                   manhattanT(target.pos, t.pos) <= area,
               )
             : [target];
@@ -289,29 +329,104 @@ export function registerSocket(io: IOServer): void {
           await appendLog(
             `${actor.label} atacou ${target.label}: ${base} de dano base` +
               (area ? ` (área ${area}, ${affected.length} alvos)` : "") +
-              (atkMod ? ` [ataque ${atkMod > 0 ? "+" : ""}${atkMod}]` : ""),
+              (atkMod ? ` [ataque ${atkMod > 0 ? "+" : ""}${atkMod}]` : "") +
+              (prof.note ? ` [${prof.note}]` : ""),
           );
         }
       } else if (action.kind === "special" && action.objectId) {
-        // Ação especial usando um objeto adjacente (ex.: chutar a mesa).
+        // Ação especial usando um objeto adjacente.
         const objTok = b.tokens.find((t) => t.id === action.objectId && t.kind === "object");
         const rule = objTok ? ruleOf(objTok) : null;
-        const target = b.tokens.find((t) => t.id === action.targetId);
-        if (objTok && rule?.damage && manhattanT(actor.pos, objTok.pos) <= 1 && target) {
-          r = roll(rule.damage, actor.label, objTok.label);
-          const base = Math.max(0, r.total + distBonus + atkMod);
-          const dmg = damageToken(target, base);
-          await appendLog(`${actor.label} usou ${objTok.label} em ${target.label}: ${dmg} de dano`);
-          if (objTok.destroyOnUse) {
-            consumed.push(objTok.id);
-            await appendLog(`${objTok.label} foi destruído.`);
+        const adjacent = !!objTok && manhattanT(actPos, objTok.pos) <= 1;
+        // Verifica usos restantes do objeto (cargas).
+        const usesOk = !objTok || objTok.usesLeft === undefined || objTok.usesLeft > 0;
+        let used = false;
+
+        if (objTok && rule && adjacent && usesOk) {
+          if (rule.kind === "action" && rule.damage) {
+            const target = b.tokens.find((t) => t.id === action.targetId);
+            if (target) {
+              r = roll(rule.damage, actor.label, objTok.label);
+              const base = Math.max(0, r.total + distBonus + atkMod);
+              const dmg = damageToken(target, base);
+              await appendLog(`${actor.label} usou ${objTok.label} em ${target.label}: ${dmg} de dano`);
+              used = true;
+            }
+          } else if (rule.kind === "reload" && action.reloadWeaponId) {
+            const w = getItems().find((i) => i.id === action.reloadWeaponId);
+            const amount = objTok.reloadAmount ?? 2;
+            const cap = w?.maxAmmo ?? 0;
+            const cur = actor.ammo?.[action.reloadWeaponId] ?? 0;
+            const next = cap ? Math.min(cap, cur + amount) : cur + amount;
+            actor.ammo = { ...(actor.ammo ?? {}), [action.reloadWeaponId]: next };
+            await appendLog(`${actor.label} recarregou ${w?.name ?? "arma"} em ${objTok.label} (+${next - cur}).`);
+            used = true;
+          } else if (rule.kind === "chest") {
+            const ch = actor.characterId
+              ? getCharacters().find((c) => c.id === actor.characterId)
+              : null;
+            if (ch && objTok.grant?.length) {
+              let items = ch.items;
+              for (const g of objTok.grant) items = adjustItem(items, g.id, g.qty);
+              await upsert("characters", { ...ch, items });
+              const names = objTok.grant
+                .map((g) => `${getItems().find((i) => i.id === g.id)?.name ?? g.id} ×${g.qty}`)
+                .join(", ");
+              await appendLog(`${actor.label} abriu ${objTok.label}: recebeu ${names}.`);
+              used = true;
+            }
           }
+        }
+
+        // Consome um uso; remove o objeto se zerou ou é de uso único.
+        if (used && objTok) {
+          if (objTok.usesLeft !== undefined) objTok.usesLeft -= 1;
+          if (objTok.destroyOnUse || (objTok.usesLeft !== undefined && objTok.usesLeft <= 0)) {
+            consumed.push(objTok.id);
+            await appendLog(`${objTok.label} foi consumido.`);
+          }
+        }
+      } else if (action.kind === "useItem" && action.useItemId) {
+        // Usar consumível: cura restaura HP do token; munição recarrega uma arma.
+        const item = getItems().find((i) => i.id === action.useItemId);
+        const ch = actor.characterId
+          ? getCharacters().find((c) => c.id === actor.characterId)
+          : null;
+        const have = ch ? itemQty(ch.items, action.useItemId) : 0;
+        if (item && ch && have > 0) {
+          if (item.heal) {
+            const before = actor.hp ?? 0;
+            actor.hp = Math.min(actor.maxHp ?? before, before + item.heal);
+            let note = `+${actor.hp - before} HP`;
+            // Cura também pode melhorar o estado (ex.: Kit Médico).
+            if (item.improveState && actor.state) {
+              const improved = improveState(actor.state, item.improveState);
+              if (improved !== actor.state) {
+                actor.state = improved;
+                note += ` → ${improved}`;
+              }
+            }
+            await appendLog(`${actor.label} usou ${item.name}: ${note}.`);
+          } else if (item.ammo && action.reloadWeaponId) {
+            const w = getItems().find((i) => i.id === action.reloadWeaponId);
+            const cap = w?.maxAmmo ?? 0;
+            const cur = actor.ammo?.[action.reloadWeaponId] ?? 0;
+            const next = cap ? Math.min(cap, cur + item.ammo) : cur + item.ammo;
+            actor.ammo = { ...(actor.ammo ?? {}), [action.reloadWeaponId]: next };
+            await appendLog(`${actor.label} recarregou ${w?.name ?? "arma"} (+${next - cur}).`);
+          }
+          // consome 1 do inventário da ficha
+          await upsert("characters", { ...ch, items: adjustItem(ch.items, action.useItemId, -1) });
         }
       }
 
-      // Tokens mortos somem do mapa; idem objetos de uso único.
+      // Tokens mortos e objetos destruídos (HP definido e zerado) somem do mapa.
       const dead = b.tokens
-        .filter((t) => (t.kind === "enemy" || t.kind === "player") && t.state === "Morto")
+        .filter(
+          (t) =>
+            ((t.kind === "enemy" || t.kind === "player") && t.state === "Morto") ||
+            (t.kind === "object" && t.hp !== undefined && t.hp <= 0),
+        )
         .map((t) => t.id);
       for (const id of dead) {
         const t = b.tokens.find((x) => x.id === id);
@@ -325,6 +440,9 @@ export function registerSocket(io: IOServer): void {
         await appendLog(`${actor.label} gastou ${charges} carga(s) de distorção (+${distBonus} dano).`);
       }
 
+      // Marca a ação principal como usada (não pode repetir; o ataque é final).
+      actor.actedThisTurn = true;
+
       await updateTokens(b.tokens);
       if (r) {
         action.rollId = r.id;
@@ -333,10 +451,9 @@ export function registerSocket(io: IOServer): void {
       await saveGame(g);
       if (damages.length > 0) io.emit("battle:damage", { events: damages });
       io.emit("action:confirmed", action);
-      // Remove mortos e objetos consumidos (mantém o ator no turno), depois avança.
+      // Remove mortos e objetos consumidos. O turno NÃO avança: o jogador ainda
+      // pode movimentar (e reverter o movimento) antes de encerrar o turno.
       await removeTokens([...dead, ...consumed], actor.id);
-      // Confirmar a ação encerra o turno do ator: avança para o próximo.
-      await advanceTurn(1);
       broadcast();
     });
 
@@ -396,6 +513,22 @@ export function registerSocket(io: IOServer): void {
       broadcast();
     });
 
+    // Usar consumível FORA de combate (só cura faz efeito; consome do inventário).
+    socket.on("item:use", async ({ characterId, itemId }: { characterId: string; itemId: string }) => {
+      const ch = getCharacters().find((c) => c.id === characterId);
+      if (!ch) return fail("Ficha não encontrada.");
+      if (!isGM && ch.userId !== user.id) return fail("Não é a sua ficha.");
+      if (getGame().mode === "battle") return fail("Use itens pelo painel de batalha.");
+      const item = getItems().find((i) => i.id === itemId);
+      if (!item || itemQty(ch.items, itemId) <= 0) return fail("Item indisponível.");
+      let hp = ch.hp;
+      let st = ch.state;
+      if (item.heal) hp = Math.min(ch.maxHp, ch.hp + item.heal);
+      if (item.improveState) st = improveState(ch.state, item.improveState);
+      await upsert("characters", { ...ch, hp, state: st, items: adjustItem(ch.items, itemId, -1) });
+      broadcast();
+    });
+
     socket.on("disconnect", () => {
       // estado é compartilhado; nada a limpar
     });
@@ -440,15 +573,53 @@ function baseMv(token: Token): number {
   return 2;
 }
 
+/** Defesa do token: vinda dos acessórios equipados na ficha do jogador. */
+function tokenDf(token: Token): number {
+  if (token.characterId) {
+    const ch = getCharacters().find((c) => c.id === token.characterId);
+    if (ch) return Math.max(0, ch.df);
+  }
+  return 0;
+}
+
+/**
+ * Bônus de dano de profissões de combate do atacante.
+ * - Pugilista: +2 desarmado (mãos livres).
+ * - Soldado: +1 com arma de fogo (alcance ≥ 2).
+ * Retorna { bonus, note }.
+ */
+function professionDamageBonus(
+  actor: Token,
+  weapon: ReturnType<typeof getItems>[number] | null,
+): { bonus: number; note?: string } {
+  if (!actor.characterId) return { bonus: 0 };
+  const ch = getCharacters().find((c) => c.id === actor.characterId);
+  if (!ch) return { bonus: 0 };
+  const isUnarmed = !weapon || weapon.id === "wpn_maos_livres";
+  const isFirearm = !!weapon && (weapon.range ?? 1) >= 2;
+  if (isUnarmed && ch.roles.includes("prof_pugilista")) {
+    return { bonus: 2, note: "Pugilista +2" };
+  }
+  if (isFirearm && ch.roles.includes("prof_soldado")) {
+    return { bonus: 1, note: "Soldado +1" };
+  }
+  return { bonus: 0 };
+}
+
 function resolveWeaponFormula(actor: Token, detail?: string): string {
   // detail pode ser o id de um item/arma; senão usa mãos livres.
   if (detail) {
     const item = getItems().find((i) => i.id === detail);
     if (item?.damage) return item.damage;
   }
-  // Inimigo vindo do catálogo de NPCs usa o dano cadastrado.
+  // Inimigo do catálogo: usa a primeira arma cadastrada (ou dano legado).
   if (actor.kind === "enemy" && actor.npcId) {
     const npc = getNpcs().find((n) => n.id === actor.npcId);
+    const firstWeaponId = npc?.weapons?.[0];
+    if (firstWeaponId) {
+      const w = getItems().find((i) => i.id === firstWeaponId);
+      if (w?.damage) return w.damage;
+    }
     if (npc?.damage) return npc.damage;
   }
   return "1d4";

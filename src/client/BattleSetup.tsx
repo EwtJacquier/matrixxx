@@ -101,9 +101,14 @@ export function BattleSetup({ onClose }: { onClose: () => void }) {
         pos: freeCell(t),
         label: obj.name,
         rule: obj.rule,
+        value: obj.value,
         objectId: obj.id,
         itemId: obj.itemId,
+        reloadAmount: obj.reloadAmount,
+        grant: obj.grant,
+        usesLeft: obj.maxUses,
         destroyOnUse: obj.destroyOnUse,
+        ...(obj.hp ? { hp: obj.hp, maxHp: obj.hp } : {}),
       },
     ]);
   }

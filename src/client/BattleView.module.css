@@ -1,7 +1,7 @@
 /* Desktop: controles | grid | histórico (lado a lado). */
 .layout {
   display: grid;
-  grid-template-columns: 300px auto 1fr;
+  grid-template-columns: 300px minmax(0, 560px) minmax(0, 1fr);
   grid-template-areas: "side board log";
   gap: 12px;
   align-items: start;
@@ -9,10 +9,12 @@
 
 .side {
   grid-area: side;
+  min-width: 0;
 }
 
 .arena {
   grid-area: board;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -20,6 +22,7 @@
 
 .log {
   grid-area: log;
+  min-width: 0;
 }
 
 /* Mobile: grid primeiro, depois controles (com iniciativa) e o histórico por último. */
@@ -54,6 +57,7 @@
   color: var(--green);
   border: 1px solid var(--green-faint);
   padding: 2px 8px;
+  margin-right: 10px;
 }
 
 .timerLow {
@@ -103,12 +107,14 @@
 .grid {
   display: grid;
   gap: 3px;
+  width: 100%;
   max-width: 560px;
   position: relative;
 }
 
 .cell {
   aspect-ratio: 1;
+  min-width: 0;
   border: 1px solid var(--green-faint);
   background: #010401;
   position: relative;
@@ -170,6 +176,28 @@
 
 .target {
   box-shadow: inset 0 0 10px rgba(255, 68, 68, 0.5);
+}
+
+/* Guia de movimentação: alvos atingíveis pelas armas (borda laranja animada). */
+.guide {
+  box-shadow: inset 0 0 10px rgba(255, 204, 0, 0.35);
+}
+
+.guide::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  background-image:
+    linear-gradient(90deg, var(--amber) 50%, transparent 50%),
+    linear-gradient(90deg, var(--amber) 50%, transparent 50%),
+    linear-gradient(0deg, var(--amber) 50%, transparent 50%),
+    linear-gradient(0deg, var(--amber) 50%, transparent 50%);
+  background-size: 12px 2px, 12px 2px, 2px 12px, 2px 12px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  animation: ants 0.5s linear infinite;
 }
 
 /* Borda tracejada animada ("marching ants") ao redor do alvo. */
@@ -359,12 +387,54 @@
   padding: 8px;
 }
 
+.logHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
 .logTitle {
-  margin: 0 0 6px;
+  margin: 0;
   font-size: 12px;
   color: var(--green-dim);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.logActions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* Links rápidos do GM no header do log. */
+.logLink {
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--green);
+  text-decoration: underline;
+}
+
+.logLink:hover:not(:disabled) {
+  background: var(--green-faint);
+  box-shadow: none;
+}
+
+.logLinkDanger {
+  color: var(--red);
+}
+
+.gmHint {
+  font-size: 11px;
+  color: var(--green-faint);
+  margin: 0;
 }
 
 .logBody {
@@ -552,6 +622,44 @@
   font-weight: bold;
 }
 
+.weaponList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.weaponRow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 6px 8px;
+  gap: 1px;
+}
+
+.weaponOn {
+  background: var(--green-faint);
+  border-color: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+
+.weaponName {
+  font-weight: bold;
+}
+
+.weaponMeta {
+  font-size: 11px;
+  color: var(--amber);
+}
+
+.weaponDesc {
+  font-size: 11px;
+  color: var(--green-dim);
+  white-space: normal;
+}
+
 .chargeNote {
   margin: 0;
   font-size: 10px;
@@ -568,6 +676,36 @@
   border-color: var(--green);
   background: var(--green-faint);
   padding: 8px;
+}
+
+.turnTabs {
+  display: flex;
+  gap: 4px;
+}
+
+.turnTabs button {
+  flex: 1;
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.turnTabOn {
+  background: var(--green-faint);
+  border-color: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+
+.phaseHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.backMove {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-color: var(--green-dim);
 }
 
 .endTurn {

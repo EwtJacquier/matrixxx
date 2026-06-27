@@ -22,6 +22,13 @@ export function isDead(state: CharState): boolean {
   return state === "Morto";
 }
 
+/** Melhora o estado em `steps` passos rumo a "Disposto" (Morto é terminal). */
+export function improveState(state: CharState, steps = 1): CharState {
+  if (isDead(state)) return state; // morto não volta com cura
+  const i = stateIndex(state);
+  return STATES[Math.max(0, i - steps)];
+}
+
 export interface DamageResult {
   hp: number;
   maxHp: number;

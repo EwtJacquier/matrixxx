@@ -59,9 +59,23 @@
 .s3 { color: #ff5500; }
 .s4 { color: var(--red); }
 
+.lvlCol {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .lvl {
   font-size: 11px;
   color: var(--green-dim);
+}
+
+.sheetBtn {
+  font-size: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
 }
 
 .stats {
@@ -95,10 +109,18 @@
 }
 
 .lists {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   font-size: 12px;
+}
+
+/* Cada categoria: rótulo numa linha, itens em chips logo abaixo. */
+.section {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 6px;
+  align-items: start;
 }
 
 .label {
@@ -106,13 +128,33 @@
   text-transform: uppercase;
   font-size: 10px;
   letter-spacing: 0.08em;
+  padding-top: 3px;
 }
 
-.lists ul {
-  margin: 4px 0 0;
-  padding-left: 14px;
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
-.lists li {
-  word-break: break-word;
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--green-faint);
+  padding: 1px 6px;
+  background: var(--bg);
+}
+
+.useBtn {
+  flex-shrink: 0;
+  padding: 0 5px;
+  font-size: 9px;
+  border-color: var(--green-dim);
+}
+
+@media (max-width: 420px) {
+  .section {
+    grid-template-columns: 1fr;
+  }
 }

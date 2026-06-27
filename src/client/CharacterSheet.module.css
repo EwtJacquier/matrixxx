@@ -3,6 +3,24 @@
   margin: 0 auto;
 }
 
+.tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--green-faint);
+  padding-bottom: 6px;
+}
+
+.tabs button {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.tabOn {
+  background: var(--green-faint);
+  border-color: var(--green);
+}
+
 .head {
   display: flex;
   align-items: baseline;
@@ -164,6 +182,30 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+.qtyStepper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.qtyStepper button {
+  width: 26px;
+  padding: 2px 0;
+}
+
+.qtyStepper b {
+  min-width: 16px;
+  text-align: center;
+}
+
+.useBtn {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 2px 10px;
+  font-size: 11px;
 }
 
 .optName {
