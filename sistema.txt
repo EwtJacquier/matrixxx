@@ -1,0 +1,97 @@
+criar sistema de rpg next js baseado em matrix.
+tem que funcionar no mobile, ter uma versão pra ele bem maneira.
+login por email e senha, criar conta, sem recuperar acesso.
+um único gm e jogadores podem entrar (máx 4).
+não vai ter seleção de mesa e nem nada, o site representa uma única mesa de jogo.
+tudo deve acontecer na mesma tela, com ações extras só pra gm.
+gm vai poder cadastrar coisas, mudar cenário.
+cada cenário vai mostrar só uma imagem.
+ao ativar batalha, gm escolhe tamanho do grid (4x4 a 7x7) e posiciona os inimigos e os jogadores. (tudo com token padrão)
+gm pode posicionar tokens de objeto pra quem tiver ajacente ganhar um bônus ou desvantagem (automático), ou uma ação principal que o objeto terá (discutir isso depois), ou apenas pegar o objeto (caso seja um item, aí só passar em cima pega ele sem custar ação principal).
+o token deve mostrar o HP e estado do inimigo. 
+deve ter um botão pra rolar iniciativa de inimigos (0 a 100)
+cada jogador rola sua iniciativa (0 a 100).
+os turnos devem avançar em ordem e o jogador precisa movimentar e escolher uma ação em relação aos tokens adjacentes (deixar visível)
+ações de batalha serão: andar e depois escolher entre uma ação principal (atacar, usar item ou ação especial) e decidir se vai aplicar uma distorção.
+ao escolher distorção , o jogador escolhe o nível (1, 2 ou 3) que adiciona um valor extra a ação, mas muda o contador de distorção de cenário.
+cada cenário possui um nível de distorção de cenário (0 a 10). em batalha, o GM usa isso pra aplicar uma dificuldade extra ao cenário. fora de batalha, fica a critério de roleplay. esse contador pode ser alterado pelo gm em tempo real.
+o gm pode avançar ou retroceder um turno, e isso faz tudo voltar a ser como era (manter histórico)
+o jogador depois de escolher o que vai fazer no combate, precisa confirmar, aí não tem mais volta e aparece o que ele escolheu mostrando no mapa pra todos)
+gm desativar o combate reseta tudo e mostra só a imagem do cenário + nome do lugar
+deve ter um lugar pra cadastrar cenários, items, disfarces, hacks.
+a tela inicial deve mostrar o cenário como principal e os estados de cada jogador com tudo o que ele possui, completo.
+a estado (em batalha) mudaria tudo isso.
+banco em json, socket em node.
+
+Estilo:
+Tudo preto, fontes verdes tipo sistema antigo, e tudo com bordas e linhas verdes
+
+Ficha de Personagem:
+/name
+/hp (pontos de vida, muda de acordo com o lvl, padrão)
+/mv (movimentação, sempre 2, só muda com acessório equipado)
+/df (defesa, sempre 0, só muda com acessório equipado, isso ignora o dano recebido em x pontos)
+/picture (foto com crop)
+/level (0, 1, 2 ou 3)
+/costume (disfarce, texto)
+/roles (lista de profissões, 2 espaços no lvl 1, 3 espaços no 2 e 4 espaços no 3)
+/hacks (lista de hacks, 2 espaços no lvl 1, 3 espaços no 2 e 4 espaços no 3)
+/items (lista de items, até 10)
+/state (estados: Disposto, Machucado, Incapacitado, Perto da Morte, Morto)
+
+
+Premissa (só pra entender do que se trata):
+
+Ao despertar no mundo atual, você é resgatado por uma equipe que trabalha para Zion. Você agora deve ajudar a despertar outros iguais a você.
+
+Você deve escolher um arquétipo e uma profissão, que foram herdados da sua vida na Matrix:
+
+Profissão: Ver tabela de profissões
+
+Ao entrar na matrix, você deve escolher 1 disfarce, 1 hack e 1 item. Caso queira levar mais coisas, deve gastar seus pontos de distorção para isso.
+
+Ao sair da matrix, você deve descansar para recuperar seus pontos de vida e seus pontos de distorção.
+
+A idéia é o jogo acontecer só dentro da matrix.
+
+== Estado do Jogo Atual: Tabela de Profissões:
+
+conceito: nome, descrição, hack_found (se existe o hack disponível pra escolher ao entrar na matrix, senão tem que achar no mundo da matrix e fazer uma cópia)
+administrável pelo jogador
+
+/habilities	/hack_found	/description	
+Pugilista	x	Você sabe lutar boxe, causa 2 de dano de contusão no combate a mãos livres	
+Hacker		Você sabe hackear equipamentos para conseguir informações	
+Soldado		Você diminui a defesa do inimigo em -1 em testes com armas de fogo	
+Atleta	x	Você recebe +2 em testes para corridas e acrobacias	
+Artista		Você sabe fazer performances artísticas	
+Aviador		Você sabe pilotar aviões e helicópteros	
+Motorista	x	Você recebe +2 em testes de condução de veículos terrestres	
+Desenhista		Você sabe fazer desenhos complexos em folhas ou quadros	
+Médico		Você pode, fora de combate, curar 1 de dano para você e todos aliados	
+Engenheiro	x	Você entende o funcionamento e pode consertar máquinas	
+Cirurgião		Você entende de anatomia e sabe fazer cirurgias	
+Detetive		Você ganha +2 em testes para perceber atividades suspeitas ou examinar locais	
+Biólogo		Você sabe lecionar e entende sobre Biologia 	
+Matemático		Você sabe lecionar e entende sobre Matemática	
+Poliglota	x	Você sabe mais 2 línguas à sua escolha	
+Cozinheiro		Você entende sobre culinária e sabe cozinhar	
+Barman	x	Você sabe fazer drinks saborosos e entende de bebidas	
+Filósofo	x	Você sabe lecionar e entende sobre Filosofia	
+
+== Batalha
+
+quero que tenham armas, acessórios e items usáveis tipo isso:
+
+Mãos Livres
+Taco / Bastão
+Faca / Canivete
+Katana
+Revolver
+Metralhadora
+Fuzil / 12
+Colete
+Escudo Policial
+Pente de Bala
+
+(gerar alguns e precisamos discutir uma regra simplona pra mudar o estado, tipo, toda vez que o HP chegar a zero, você piora o state, aí o HP vai pra 100% denovo mas cada dano piora conforme o state)

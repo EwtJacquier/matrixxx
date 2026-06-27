@@ -1,0 +1,200 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.modal {
+  width: 100%;
+  max-width: 860px;
+  max-height: 92vh;
+  overflow-y: auto;
+  border: 1px solid var(--green);
+  background: var(--bg-soft);
+  padding: 16px;
+  box-shadow: 0 0 28px var(--green-glow);
+}
+
+.modal h2 {
+  margin-top: 0;
+}
+
+.templates {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  padding: 8px;
+  margin-bottom: 12px;
+  border: 1px solid var(--green-faint);
+}
+
+.templates label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--green-dim);
+}
+
+.tplSave {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.body {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 16px;
+}
+
+.grid {
+  display: grid;
+  gap: 3px;
+  align-self: start;
+}
+
+.cell {
+  width: 52px;
+  height: 52px;
+  border: 1px solid var(--green-faint);
+  background: #010401;
+  font-size: 10px;
+  padding: 0;
+  text-transform: none;
+  color: var(--green);
+}
+
+.k_player {
+  background: var(--green-faint);
+  border-color: var(--green);
+}
+.k_enemy {
+  background: rgba(255, 68, 68, 0.15);
+  border-color: var(--red);
+  color: var(--red);
+}
+.k_npc {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: #e8e8e8;
+  color: #f0f0f0;
+}
+.k_object {
+  background: rgba(255, 204, 0, 0.12);
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.sel {
+  box-shadow: 0 0 10px var(--green-glow);
+  outline: 1px solid var(--green);
+}
+
+.tokens {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tokRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--green-faint);
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.tokSel {
+  border-color: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+
+.tokRow input,
+.tokRow select {
+  flex: 1;
+  min-width: 40px;
+}
+
+.tokName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hp {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--green-dim);
+  white-space: nowrap;
+}
+
+.ruleTag {
+  font-size: 10px;
+  color: var(--amber);
+  border: 1px solid var(--green-faint);
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+
+.dot_player,
+.dot_enemy,
+.dot_object {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+}
+.dot_player { background: var(--green); }
+.dot_enemy { background: var(--red); }
+.dot_object { background: var(--amber); }
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.warn {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--amber);
+}
+
+.start {
+  border-color: var(--green);
+  background: var(--green-faint);
+}
+
+@media (max-width: 720px) {
+  .body {
+    grid-template-columns: 1fr;
+  }
+  .cell {
+    width: 40px;
+    height: 40px;
+  }
+}

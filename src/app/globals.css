@@ -1,0 +1,131 @@
+:root {
+  --bg: #000000;
+  --bg-soft: #020a02;
+  --green: #00ff66;
+  --green-dim: #00b34a;
+  --green-faint: #0a3d1f;
+  --green-glow: rgba(0, 255, 102, 0.35);
+  --red: #ff4444;
+  --amber: #ffcc00;
+  --font-mono: "Courier New", "Consolas", "Lucida Console", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--green);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  min-height: 100vh;
+}
+
+/* leve scanline de CRT */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.18) 3px
+  );
+  z-index: 9999;
+  opacity: 0.5;
+}
+
+a {
+  color: var(--green);
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: var(--font-mono);
+  background: var(--bg);
+  color: var(--green);
+  border: 1px solid var(--green-dim);
+  padding: 6px 10px;
+  font-size: 14px;
+  outline: none;
+}
+
+/* Remove o fundo claro do autocomplete/autofill do navegador (mantém preto/verde). */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: var(--green);
+  caret-color: var(--green);
+  -webkit-box-shadow: 0 0 0 1000px var(--bg) inset;
+  box-shadow: 0 0 0 1000px var(--bg) inset;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+button {
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: all 0.12s ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--green-faint);
+  box-shadow: 0 0 8px var(--green-glow);
+}
+
+button:disabled {
+  color: var(--green-faint);
+  border-color: var(--green-faint);
+  cursor: not-allowed;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 8px var(--green-glow);
+}
+
+h1,
+h2,
+h3 {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: normal;
+  text-shadow: 0 0 6px var(--green-glow);
+}
+
+.panel {
+  border: 1px solid var(--green-dim);
+  padding: 12px;
+  background: var(--bg-soft);
+}
+
+.muted {
+  color: var(--green-dim);
+}
+
+.danger {
+  color: var(--red);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--green-faint);
+}

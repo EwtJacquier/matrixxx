@@ -1,0 +1,14 @@
+node_modules/
+.next/
+out/
+build/
+*.log
+.DS_Store
+.env*.local
+
+# Banco de dados JSON em runtime (mantemos só os seeds)
+/data/*.json
+!/data/.gitkeep
+
+# Assets do dice-box (copiados de node_modules pelo postinstall)
+/public/assets/dice-box/

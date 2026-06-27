@@ -1,0 +1,98 @@
+.wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.box {
+  width: 100%;
+  max-width: 380px;
+  border: 1px solid var(--green-dim);
+  background: var(--bg-soft);
+  padding: 20px;
+  box-shadow: 0 0 24px var(--green-glow);
+}
+
+.logo {
+  color: var(--green);
+  font-size: 10px;
+  line-height: 1.1;
+  margin: 0;
+  text-shadow: 0 0 6px var(--green-glow);
+  overflow-x: auto;
+}
+
+.sub {
+  color: var(--green-dim);
+  margin: 4px 0 16px;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.tabs button {
+  flex: 1;
+}
+
+.tabs .active {
+  background: var(--green-faint);
+  border-color: var(--green);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--green-dim);
+}
+
+.form input {
+  width: 100%;
+}
+
+.roles {
+  border: 1px solid var(--green-faint);
+  display: flex;
+  gap: 16px;
+}
+
+.roles legend {
+  padding: 0 6px;
+  color: var(--green-dim);
+}
+
+.radio {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+  color: var(--green) !important;
+}
+
+.radio input {
+  width: auto;
+}
+
+.error {
+  color: var(--red);
+  margin: 0;
+  font-size: 13px;
+}
+
+.note {
+  color: var(--green-faint);
+  font-size: 11px;
+  text-align: center;
+  margin: 14px 0 0;
+}

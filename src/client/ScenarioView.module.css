@@ -1,0 +1,117 @@
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 12px;
+  align-items: start;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.scenarioBox {
+  position: relative;
+  border: 1px solid var(--green-dim);
+  background: #000;
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.image {
+  width: 100%;
+  height: auto;
+  max-height: 60vh;
+  object-fit: contain;
+  filter: saturate(0.7) hue-rotate(60deg) brightness(0.9);
+}
+
+.noImage {
+  color: var(--green-faint);
+  padding: 80px 0;
+}
+
+.scenarioName {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 12px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 8px var(--green-glow);
+}
+
+.distortion {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--green-faint);
+  padding: 8px 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+}
+
+.bar {
+  display: flex;
+  gap: 3px;
+}
+
+.cell,
+.cellOn {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--green-faint);
+}
+
+.cellOn {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+  border-color: var(--green);
+}
+
+.distControls {
+  display: flex;
+  gap: 4px;
+}
+.distControls button {
+  padding: 2px 10px;
+}
+
+.gmBar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  border: 1px solid var(--green-faint);
+  padding: 8px 12px;
+}
+
+.gmBar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.players {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.players h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
