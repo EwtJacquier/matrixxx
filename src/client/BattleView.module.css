@@ -64,6 +64,7 @@
   perspective-origin: 50% 42%;
   overflow: hidden;
   cursor: grab;
+  touch-action: none; /* gestos do board tratados por nós (pan/pinça) */
 }
 
 .scene:active {
@@ -1194,5 +1195,81 @@
   font-size: 12px;
   border-color: var(--green-faint);
   color: var(--green-dim);
+}
+
+/* ===================== MOBILE ===================== */
+
+/* O layout preenche a moldura (paisagem travada ou rotacionada). */
+.layoutMobile {
+  height: 100%;
+  min-height: 0;
+}
+
+/* Painel de ação compacto à direita; convive com o direcional (canto inf. esq.). */
+.layoutMobile .side {
+  width: 208px;
+  top: 6px;
+  right: 6px;
+  bottom: 6px;
+  max-height: calc(100% - 12px);
+  font-size: 12px;
+  gap: 6px;
+}
+
+.layoutMobile .actionPanel h3 {
+  font-size: 13px;
+  margin: 0 0 4px;
+}
+
+/* Barra superior (timer/distorção) reduzida e encostada à esquerda do centro. */
+.layoutMobile .topBar {
+  top: 4px;
+  padding: 2px 8px;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.layoutMobile .timer {
+  font-size: 12px;
+  padding: 1px 6px;
+  margin-right: 6px;
+}
+
+.layoutMobile .dist {
+  font-size: 11px;
+}
+
+.layoutMobile .camReset {
+  font-size: 10px;
+  padding: 1px 6px;
+}
+
+/* Iniciativa reduzida no topo-esquerdo. */
+.initMobile {
+  width: 148px;
+  max-height: 34%;
+  padding: 4px 6px;
+}
+
+.initMobile h3 {
+  font-size: 11px;
+  margin: 0 0 2px;
+}
+
+.initMobile ol {
+  font-size: 10px;
+}
+
+/* Labels dos tokens menores no mobile. */
+.layoutMobile .cubeName,
+.layoutMobile .cubeHp,
+.layoutMobile .cubeStateLabel,
+.layoutMobile .cubeBadgeLabel,
+.layoutMobile .cubeFlanked,
+.layoutMobile .cubeBonus,
+.layoutMobile .cubeMalus,
+.layoutMobile .cubeDt {
+  font-size: 7px;
+  line-height: 1.1;
 }
 

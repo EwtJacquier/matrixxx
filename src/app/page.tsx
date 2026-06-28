@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { GameProvider } from "@/client/GameProvider";
 import { Login } from "@/client/Login";
 import { Table } from "@/client/Table";
+import { MobileGate } from "@/client/MobileGate";
 import { unlockSfx } from "@/client/sfx";
 import gate from "@/client/Login.module.css";
 
@@ -70,7 +71,9 @@ export default function Home() {
 
   return (
     <GameProvider session={session}>
-      <Table />
+      <MobileGate>
+        <Table />
+      </MobileGate>
     </GameProvider>
   );
 }

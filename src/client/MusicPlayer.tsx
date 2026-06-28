@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useGame } from "./GameProvider";
 import { fmtTime as fmt } from "./audio";
+import { useMobile } from "./useMobile";
 import type { MusicMeta, NowPlaying } from "@/game/types";
 import styles from "./MusicPlayer.module.css";
 
@@ -19,6 +20,7 @@ function positionFor(np: NowPlaying | null, duration: number): number {
 export function MusicPlayer() {
   const { state, session, emit, trackData } = useGame();
   const isGM = session?.role === "gm";
+  const mobile = useMobile();
   const nowPlaying = state?.game.nowPlaying ?? null;
   const music: MusicMeta[] = state?.music ?? [];
   const current = music.find((m) => m.id === nowPlaying?.trackId) ?? null;
@@ -155,6 +157,12 @@ export function MusicPlayer() {
   const rawPos = positionFor(nowPlaying, duration);
   const pos = duration ? Math.min(rawPos, duration) : rawPos;
   const progress = duration ? Math.min(1, pos / duration) : 0;
+
+  // No mobile, sem a UI do player — só o áudio (a música continua tocando/sincronizada).
+  if (mobile) {
+    // eslint-disable-next-line jsx-a11y/media-has-caption
+    return <audio ref={audioRef} hidden />;
+  }
 
   return (
     <div className={styles.player}>

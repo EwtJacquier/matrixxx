@@ -27,6 +27,14 @@ body {
   min-height: 100vh;
 }
 
+/* Mobile: a moldura (paisagem/rotação) controla a altura; sem rolagem do body. */
+html.mobile,
+html.mobile body {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* leve scanline de CRT */
 body::after {
   content: "";

@@ -1,0 +1,56 @@
+.pad {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none; /* só os botões capturam toque */
+  touch-action: none;
+}
+
+.btn {
+  pointer-events: auto;
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  font-size: 20px;
+  border: 1px solid var(--green);
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--green);
+  border-radius: 8px;
+  user-select: none;
+  -webkit-user-select: none;
+  box-shadow: 0 0 8px var(--green-glow);
+}
+
+.btn:active {
+  background: var(--green-faint);
+}
+
+/* Direcional — canto inferior esquerdo */
+.dpad {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  width: 180px;
+  height: 180px;
+  pointer-events: none;
+}
+
+.up {
+  left: 62px;
+  top: 0;
+}
+.down {
+  left: 62px;
+  bottom: 0;
+}
+.left {
+  left: 0;
+  top: 62px;
+}
+.right {
+  right: 0;
+  top: 62px;
+}

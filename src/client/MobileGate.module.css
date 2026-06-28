@@ -1,0 +1,59 @@
+.gate {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+}
+
+.gateBox {
+  border: 1px solid var(--green-dim);
+  padding: 24px;
+  background: var(--bg-soft);
+  max-width: 420px;
+}
+
+.brand {
+  font-size: 28px;
+  letter-spacing: 0.3em;
+  text-shadow: 0 0 10px var(--green-glow);
+  margin: 0;
+}
+
+.sub {
+  color: var(--green-dim);
+  margin: 4px 0 16px;
+}
+
+.text {
+  color: var(--green);
+  margin: 0 0 18px;
+}
+
+.gateBox button {
+  width: 100%;
+  padding: 12px;
+  font-size: 16px;
+}
+
+/* Passa-through transparente (tela cheia + paisagem, sem rotação). */
+.frame {
+  display: contents;
+}
+
+/* Fallback: aparelho na vertical → rotaciona o conteúdo para paisagem.
+   A moldura ocupa 100vh de largura e 100vw de altura (eixos trocados). */
+.rotate {
+  position: fixed;
+  top: 100%;
+  left: 0;
+  width: 100vh;
+  height: 100vw;
+  transform-origin: left top;
+  transform: rotate(-90deg);
+  overflow: hidden;
+}

@@ -80,3 +80,50 @@
     margin-left: 0;
   }
 }
+
+/* ===================== MOBILE ===================== */
+/* Preenche a moldura (paisagem travada ou rotacionada via MobileGate). */
+:global(html.mobile) .app {
+  height: 100%;
+  min-height: 0;
+}
+
+:global(html.mobile) .main {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+}
+
+/* Header minimalista: compacto, sem texto de e-mail. */
+:global(html.mobile) .header {
+  min-height: 28px;
+  padding: 2px 8px;
+  gap: 8px;
+  font-size: 11px;
+  flex-wrap: nowrap;
+}
+
+:global(html.mobile) .brand {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+:global(html.mobile) .nav button {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+:global(html.mobile) .status {
+  width: auto;
+  margin-left: auto;
+  font-size: 10px;
+  gap: 4px;
+}
+
+:global(html.mobile) .userEmail {
+  display: none;
+}
+
+:global(html.mobile) .logout {
+  padding: 1px 6px;
+}

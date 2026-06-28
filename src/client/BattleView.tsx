@@ -10,6 +10,9 @@ import { isFlanked } from "@/game/flank";
 import { reachableCells } from "@/game/path";
 import { DISTORTION_DMG_PER_CHARGE, stateMovePenalty } from "@/game/rules";
 import { playSfx } from "./sfx";
+import { useMobile } from "./useMobile";
+import { TouchControls } from "./TouchControls";
+import type { InputAction } from "./input";
 import styles from "./BattleView.module.css";
 
 /** Distância em casas: diagonal não é adjacente (custa +1). */
@@ -30,6 +33,7 @@ export function BattleView() {
   const { state, session, emit, damagePopups, battleIntent, turnEndsAt } = useGame();
   const battle = state?.game.battle ?? null;
   const isGM = session?.role === "gm";
+  const mobile = useMobile();
 
   // Tick de 1s para o contador regressivo do turno.
   const [now, setNow] = useState(Date.now());
@@ -109,7 +113,12 @@ export function BattleView() {
   const panRef = useRef({ x: 0, y: 0 });
   zoomRef.current = zoom;
   panRef.current = pan;
-  const clampZoom = (z: number) => Math.max(1, Math.min(1.5, z));
+  // Toque: ponteiros ativos (pan com 1 dedo, pinça com 2).
+  const touchPts = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
+  // No mobile o zoom abre mais (pinça) para enxergar o tabuleiro todo.
+  const clampZoom = (z: number) =>
+    Math.max(mobile ? 0.5 : 1, Math.min(mobile ? 2 : 1.5, z));
 
   // Recomeça o fluxo quando muda o ator/turno.
   useEffect(() => {
@@ -717,7 +726,10 @@ export function BattleView() {
             // pra movimentar a partir da casa onde o turno começou).
             { key: "move", label: "Mover", disabled: acted && hasMoved, run: () => { setMenuIndex(0); setNav("move"); } },
             { key: "act", label: "Agir", disabled: acted || !canAct, run: () => { setMenuIndex(0); setNav("act"); } },
-            { key: "inspect", label: "Inspecionar", run: () => { setCursor(stagedPos ?? actorPos); setNav("inspect"); } },
+            // Inspecionar não aparece no mobile (sem cursor de inspeção por enquanto).
+            ...(mobile
+              ? []
+              : [{ key: "inspect", label: "Inspecionar", run: () => { setCursor(stagedPos ?? actorPos); setNav("inspect"); } }]),
             { key: "end", label: "Encerrar", run: () => { setMenuIndex(0); setNav("confirmEndTurn"); } },
             ...(isGM
               ? [{ key: "endbattle", label: "Encerrar combate (pausa)", run: () => { setMenuIndex(0); setNav("confirmEndBattle"); } }]
@@ -786,7 +798,6 @@ export function BattleView() {
     }
   }
 
-  type InputAction = "up" | "down" | "left" | "right" | "confirm" | "cancel" | "distMinus" | "distPlus";
   const inputRef = useRef<(a: InputAction) => void>(() => {});
   inputRef.current = (a) => {
     if (!controlsActor) return;
@@ -989,7 +1000,7 @@ export function BattleView() {
   ]);
 
   return (
-    <div className={styles.layout}>
+    <div className={`${styles.layout} ${mobile ? styles.layoutMobile : ""}`}>
       <section className={styles.arena}>
         <div className={styles.topBar}>
           {endsAt > 0 && (
@@ -1020,6 +1031,19 @@ export function BattleView() {
           }}
           onContextMenu={(e) => e.preventDefault()}
           onPointerDown={(e) => {
+            // Toque: 1 dedo = arrasta (pan), 2 dedos = pinça (zoom).
+            if (e.pointerType === "touch") {
+              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              touchPts.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+              if (touchPts.current.size === 2) {
+                const [a, b] = [...touchPts.current.values()];
+                pinchRef.current = {
+                  dist: Math.hypot(a.x - b.x, a.y - b.y),
+                  zoom: zoomRef.current,
+                };
+              }
+              return;
+            }
             // Botão direito arrasta (pan) o tabuleiro.
             if (e.button !== 2) return;
             e.preventDefault();
@@ -1035,6 +1059,30 @@ export function BattleView() {
             };
             window.addEventListener("pointermove", move);
             window.addEventListener("pointerup", up);
+          }}
+          onPointerMove={(e) => {
+            if (e.pointerType !== "touch") return;
+            const pts = touchPts.current;
+            const prev = pts.get(e.pointerId);
+            if (!prev) return;
+            pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            if (pts.size === 1) {
+              setPan((p) => ({ x: p.x + (e.clientX - prev.x), y: p.y + (e.clientY - prev.y) }));
+            } else if (pts.size === 2 && pinchRef.current) {
+              const [a, b] = [...pts.values()];
+              const d = Math.hypot(a.x - b.x, a.y - b.y);
+              setZoom(clampZoom(pinchRef.current.zoom * (d / pinchRef.current.dist)));
+            }
+          }}
+          onPointerUp={(e) => {
+            if (e.pointerType !== "touch") return;
+            touchPts.current.delete(e.pointerId);
+            if (touchPts.current.size < 2) pinchRef.current = null;
+          }}
+          onPointerCancel={(e) => {
+            if (e.pointerType !== "touch") return;
+            touchPts.current.delete(e.pointerId);
+            if (touchPts.current.size < 2) pinchRef.current = null;
           }}
         >
         <div
@@ -1080,14 +1128,18 @@ export function BattleView() {
                   isActorCell ? styles.actorCell : "",
                   isCursor ? styles.cursor : "",
                 ].join(" ")}
-                onClick={() => {
-                  if (nav === "inspect") {
-                    if (cursor.x !== x || cursor.y !== y) {
-                      setCursor({ x, y });
-                      playSfx("move");
-                    }
-                  } else clickCell(x, y);
-                }}
+                onClick={
+                  mobile
+                    ? undefined // mobile: o board só faz pan/zoom por toque
+                    : () => {
+                        if (nav === "inspect") {
+                          if (cursor.x !== x || cursor.y !== y) {
+                            setCursor({ x, y });
+                            playSfx("move");
+                          }
+                        } else clickCell(x, y);
+                      }
+                }
               >
                 {tok && (
                   <Cube
@@ -1098,11 +1150,14 @@ export function BattleView() {
                     damage={damagePopups.find((d) => d.tokenId === tok.id)}
                     flanked={flankedIds.has(tok.id)}
                     onInspect={
-                      // Todos podem inspecionar clicando — exceto a própria casa do
-                      // ator durante o movimento (lá o clique serve para mover).
-                      !(phase === "move" && controlsActor && tok.id === currentActor?.id)
-                        ? () => setInspectId(tok.id)
-                        : undefined
+                      // Mobile não tem inspeção por enquanto (board é só pan/zoom).
+                      mobile
+                        ? undefined
+                        : // Todos podem inspecionar clicando — exceto a própria casa do
+                          // ator durante o movimento (lá o clique serve para mover).
+                          !(phase === "move" && controlsActor && tok.id === currentActor?.id)
+                          ? () => setInspectId(tok.id)
+                          : undefined
                     }
                   />
                 )}
@@ -1314,8 +1369,12 @@ export function BattleView() {
 
       </aside>
 
-      {/* Iniciativa no topo-esquerdo. */}
-      <div className={`${styles.initiative} ${styles.initPanel}`}>
+      {/* Iniciativa no topo-esquerdo (reduzida no mobile). */}
+      <div
+        className={`${styles.initiative} ${styles.initPanel} ${
+          mobile ? styles.initMobile : ""
+        }`}
+      >
         <h3>Iniciativa</h3>
         <ol>
           {battle.initiative.map((i, idx) => {
@@ -1333,7 +1392,8 @@ export function BattleView() {
         </ol>
       </div>
 
-      {/* Topo-direito: Objetos + Histórico em abas. */}
+      {/* Topo-direito: Objetos + Histórico em abas. Ocultos no mobile. */}
+      {!mobile && (
       <div className={`${styles.objects} ${styles.objPanel}`}>
         <div className={styles.panelTabs}>
           <button
@@ -1393,9 +1453,10 @@ export function BattleView() {
           </div>
         )}
       </div>
+      )}
 
-      {/* Inferior-esquerdo: inspetor (sempre visível; se nada selecionado, o ator atual). */}
-      {inspectShown && (
+      {/* Inferior-esquerdo: inspetor — oculto no mobile. */}
+      {!mobile && inspectShown && (
         <div className={styles.inspectPanel}>
           <TokenInspector
             token={inspectShown}
@@ -1409,6 +1470,11 @@ export function BattleView() {
             }
           />
         </div>
+      )}
+
+      {/* Direcional na tela (mobile) — só durante a movimentação do token. */}
+      {mobile && controlsActor && nav === "move" && (
+        <TouchControls onInput={(a) => inputRef.current(a)} />
       )}
     </div>
   );

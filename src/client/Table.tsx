@@ -73,7 +73,9 @@ export function Table() {
         <MusicPlayer />
         <span className={styles.status}>
           <span className={connected ? styles.on : styles.off}>●</span>{" "}
-          {session?.email} [{session?.role}]
+          <span className={styles.userEmail}>
+            {session?.email} [{session?.role}]
+          </span>
           <button className={styles.logout} onClick={logout}>
             sair
           </button>
