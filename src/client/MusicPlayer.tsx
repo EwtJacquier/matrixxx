@@ -47,12 +47,14 @@ export function MusicPlayer() {
     }
   }, []);
 
-  // Pede o áudio (data URL) da faixa atual sob demanda.
+  // Pede o áudio (data URL) da faixa atual sob demanda. No mobile não toca música
+  // (só SFX), então nem busca o áudio.
   useEffect(() => {
+    if (mobile) return;
     if (nowPlaying?.trackId && trackData?.id !== nowPlaying.trackId) {
       emit("music:track", { trackId: nowPlaying.trackId });
     }
-  }, [nowPlaying?.trackId, trackData?.id, emit]);
+  }, [mobile, nowPlaying?.trackId, trackData?.id, emit]);
 
   // Define a fonte do <audio> quando o áudio chega (ou para, sem música).
   useEffect(() => {
@@ -158,11 +160,8 @@ export function MusicPlayer() {
   const pos = duration ? Math.min(rawPos, duration) : rawPos;
   const progress = duration ? Math.min(1, pos / duration) : 0;
 
-  // No mobile, sem a UI do player — só o áudio (a música continua tocando/sincronizada).
-  if (mobile) {
-    // eslint-disable-next-line jsx-a11y/media-has-caption
-    return <audio ref={audioRef} hidden />;
-  }
+  // No mobile não há música, só SFX — não renderiza o player nem o áudio.
+  if (mobile) return null;
 
   return (
     <div className={styles.player}>

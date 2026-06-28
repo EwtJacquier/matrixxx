@@ -1279,7 +1279,7 @@ export function BattleView() {
                   </div>
                 </div>
                 <button className={styles.confirm} onClick={() => { playSfx("confirm"); exitMove(); }}>
-                  {acted && hasMoved ? "✓ Confirmar movimento e encerrar" : "◀ Voltar ao menu"}
+                  {acted && hasMoved ? "✓ Confirmar movimento e encerrar" : "✓ Confirmar movimento"}
                 </button>
               </>
             ) : (
