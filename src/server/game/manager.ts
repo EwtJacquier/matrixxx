@@ -18,6 +18,7 @@ import {
   getGame,
   getHacks,
   getItems,
+  getMusic,
   getNpcs,
   getObjects,
   getProfessions,
@@ -39,6 +40,8 @@ export function buildPublicState(): PublicState {
     objects: getObjects(),
     battleTemplates: getBattleTemplates(),
     characters: getCharacters(),
+    // Só metadados: o áudio (data URL) é pesado e é buscado sob demanda.
+    music: getMusic().map((t) => ({ id: t.id, name: t.name, duration: t.duration })),
     players: getUsers().map((u) => ({ id: u.id, email: u.email, role: u.role })),
   };
 }
@@ -56,6 +59,32 @@ export async function setScenario(scenarioId: string): Promise<void> {
   await mutate((g) => {
     g.scenarioId = scenarioId;
     if (scn) g.distortion = clampDistortion(scn.distortion);
+  });
+}
+
+// --- Música compartilhada ---
+
+/** Começa a tocar uma faixa (posição derivada de startedAt = agora). */
+export async function playTrack(trackId: string): Promise<void> {
+  const exists = getMusic().some((t) => t.id === trackId);
+  if (!exists) return;
+  await mutate((g) => {
+    const loop = g.nowPlaying?.loop ?? true;
+    g.nowPlaying = { trackId, startedAt: Date.now(), loop };
+  });
+}
+
+/** Liga/desliga o loop sem reiniciar a faixa (mantém startedAt). */
+export async function setMusicLoop(loop: boolean): Promise<void> {
+  await mutate((g) => {
+    if (g.nowPlaying) g.nowPlaying = { ...g.nowPlaying, loop };
+  });
+}
+
+/** Para a música. */
+export async function stopMusic(): Promise<void> {
+  await mutate((g) => {
+    g.nowPlaying = null;
   });
 }
 
@@ -150,6 +179,7 @@ export async function startBattle(grid: number, tokens: Token[]): Promise<void> 
       tokens,
       initiative: [],
       turnIndex: 0,
+      turnSeq: 0,
       turnEndsAt: 0,
       history: [],
       log: ["Batalha iniciada."],
@@ -187,6 +217,65 @@ export async function resumeBattle(): Promise<void> {
   });
 }
 
+/** GM adiciona um inimigo (do catálogo de NPCs) numa casa vazia, em combate. */
+export async function addEnemyToken(
+  npcId: string,
+  pos: { x: number; y: number },
+): Promise<void> {
+  const npc = getNpcs().find((n) => n.id === npcId);
+  if (!npc) return;
+  await mutate((g) => {
+    const b = g.battle;
+    if (!b) return;
+    if (b.tokens.some((t) => t.pos.x === pos.x && t.pos.y === pos.y)) return; // ocupada
+    const keep = b.initiative[b.turnIndex]?.tokenId;
+    const tok: Token = {
+      id: `tok_${Math.random().toString(36).slice(2, 9)}`,
+      kind: "enemy",
+      pos: { ...pos },
+      label: npc.name,
+      hp: npc.hp,
+      maxHp: npc.hp,
+      state: "Disposto",
+      npcId: npc.id,
+      neutral: npc.hostile === false,
+    };
+    tok.charges = maxCharges(npc.level ?? 0);
+    tok.ammo = initialAmmo(tok);
+    b.tokens.push(tok);
+    const value = Math.floor(Math.random() * 100) + 1;
+    b.initiative.push({ tokenId: tok.id, value, label: npc.name });
+    b.initiative.sort((a, c) => c.value - a.value);
+    const idx = b.initiative.findIndex((i) => i.tokenId === keep);
+    if (idx >= 0) b.turnIndex = idx;
+    pushLog(g, `GM adicionou ${npc.name} (iniciativa ${value}).`);
+  });
+}
+
+/**
+ * Insere um token na ordem de iniciativa (se ainda não estiver), reordena e
+ * mantém o turno apontando para o ator atual. Retorna true se inseriu.
+ */
+export async function addInitiativeEntry(
+  tokenId: string,
+  value: number,
+  label: string,
+): Promise<boolean> {
+  let ok = false;
+  await mutate((g) => {
+    const b = g.battle;
+    if (!b) return;
+    if (b.initiative.some((i) => i.tokenId === tokenId)) return;
+    const keep = b.initiative[b.turnIndex]?.tokenId;
+    b.initiative.push({ tokenId, value, label });
+    b.initiative.sort((a, c) => c.value - a.value);
+    const idx = b.initiative.findIndex((i) => i.tokenId === keep);
+    if (idx >= 0) b.turnIndex = idx;
+    ok = true;
+  });
+  return ok;
+}
+
 export async function updateTokens(tokens: Token[]): Promise<void> {
   await mutate((g) => {
     if (g.battle) g.battle.tokens = tokens;
@@ -198,6 +287,7 @@ export async function setInitiative(initiative: Initiative[]): Promise<void> {
     if (!g.battle) return;
     g.battle.initiative = [...initiative].sort((a, b) => b.value - a.value);
     g.battle.turnIndex = 0;
+    g.battle.turnSeq = (g.battle.turnSeq ?? 0) + 1;
     g.battle.turnEndsAt = Date.now() + TURN_DURATION_MS;
     regenCurrentActor(g.battle);
     g.battle.history = [snapshot(g)];
@@ -225,6 +315,9 @@ export async function advanceTurn(dir: 1 | -1): Promise<void> {
     }
     // Reinicia o contador a cada mudança de turno (inclusive ao voltar o histórico).
     b.turnEndsAt = Date.now() + TURN_DURATION_MS;
+    // Novo turno exibido (avançar ou retroceder): incrementa o id monotônico para
+    // o cliente reiniciar o fluxo. Mortes/remoções no meio do turno NÃO mexem aqui.
+    b.turnSeq = (b.turnSeq ?? 0) + 1;
     // Avançar concede as cargas de distorção do novo ator (retroceder não).
     if (dir === 1) regenCurrentActor(b);
   });
@@ -265,10 +358,18 @@ export async function dropFromInitiative(ids: string[], keepActorId: string): Pr
   });
 }
 
+/** Mantém só as últimas N ações no histórico de combate (não guarda o resto). */
+export const MAX_LOG = 20;
+function pushLog(g: GameState, line: string): void {
+  if (!g.battle) return;
+  g.battle.log.push(line);
+  if (g.battle.log.length > MAX_LOG) {
+    g.battle.log = g.battle.log.slice(-MAX_LOG);
+  }
+}
+
 export async function appendLog(line: string): Promise<void> {
-  await mutate((g) => {
-    if (g.battle) g.battle.log.push(line);
-  });
+  await mutate((g) => pushLog(g, line));
 }
 
 export async function setLastRoll(roll: Roll): Promise<void> {

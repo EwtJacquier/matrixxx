@@ -21,6 +21,9 @@ async function main() {
 
   const io = new IOServer(server, {
     cors: { origin: true, credentials: true },
+    // Uploads de MP3 (data URL) e imagens chegam via socket; o padrão de 1 MB
+    // é pequeno demais e derrubaria a conexão. Eleva para 30 MB.
+    maxHttpBufferSize: 30 * 1024 * 1024,
   });
   registerSocket(io);
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { unlockSfx } from "./sfx";
 import styles from "./Login.module.css";
 
 interface Roles {
@@ -17,6 +18,8 @@ export function Login({ roles, onAuth }: { roles: Roles; onAuth: () => void }) {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    // Destrava o AudioContext ainda dentro do gesto do usuário (clique/submit).
+    unlockSfx();
     setBusy(true);
     setError(null);
     const url = mode === "login" ? "/api/auth/login" : "/api/auth/signup";

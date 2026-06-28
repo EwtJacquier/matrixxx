@@ -6,6 +6,7 @@ import { ScenarioView } from "./ScenarioView";
 import { BattleView } from "./BattleView";
 import { CatalogAdmin } from "./CatalogAdmin";
 import { CharacterSheet } from "./CharacterSheet";
+import { MusicPlayer } from "./MusicPlayer";
 import styles from "./Table.module.css";
 
 type View = "table" | "catalog" | "sheet";
@@ -69,6 +70,7 @@ export function Table() {
             <button onClick={() => setView("table")}>← Mesa</button>
           )}
         </nav>
+        <MusicPlayer />
         <span className={styles.status}>
           <span className={connected ? styles.on : styles.off}>●</span>{" "}
           {session?.email} [{session?.role}]

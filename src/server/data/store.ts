@@ -11,6 +11,7 @@ import type {
   GameState,
   Hack,
   CatalogItem,
+  MusicTrack,
   Npc,
   Profession,
   Scenario,
@@ -40,6 +41,7 @@ type Collections = {
   npcs: Npc[];
   objects: GameObject[];
   battleTemplates: BattleTemplate[];
+  music: MusicTrack[];
   game: GameState;
 };
 
@@ -49,6 +51,7 @@ const DEFAULT_GAME: GameState = {
   distortion: 0,
   battle: null,
   lastRoll: null,
+  nowPlaying: null,
 };
 
 const DEFAULTS: Collections = {
@@ -62,6 +65,7 @@ const DEFAULTS: Collections = {
   npcs: NPCS,
   objects: OBJECTS,
   battleTemplates: BATTLE_TEMPLATES,
+  music: [],
   game: DEFAULT_GAME,
 };
 
@@ -122,6 +126,7 @@ export async function initStore(): Promise<void> {
     npcs,
     objects,
     battleTemplates,
+    music,
     game,
   ] = await Promise.all([
     readCollection("users"),
@@ -134,6 +139,7 @@ export async function initStore(): Promise<void> {
     readCollection("npcs"),
     readCollection("objects"),
     readCollection("battleTemplates"),
+    readCollection("music"),
     readCollection("game"),
   ]);
   // Migra fichas antigas: items string[] -> ItemStack[].
@@ -153,6 +159,7 @@ export async function initStore(): Promise<void> {
     npcs,
     objects,
     battleTemplates,
+    music,
     game,
   };
   // Garante que os arquivos de seed existam no disco no primeiro boot.
@@ -165,6 +172,7 @@ export async function initStore(): Promise<void> {
     persist("npcs"),
     persist("objects"),
     persist("battleTemplates"),
+    persist("music"),
     persist("game"),
   ]);
 }
@@ -240,6 +248,10 @@ export function getCharacters(): Character[] {
   return db().characters;
 }
 
+export function getMusic(): MusicTrack[] {
+  return db().music;
+}
+
 export function getGame(): GameState {
   return db().game;
 }
@@ -254,6 +266,7 @@ type CrudCollection =
   | "npcs"
   | "objects"
   | "battleTemplates"
+  | "music"
   | "characters";
 
 export async function upsert<T extends { id: string }>(

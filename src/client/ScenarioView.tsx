@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useGame } from "./GameProvider";
 import { PlayerPanel } from "./PlayerPanel";
 import { BattleSetup } from "./BattleSetup";
+import { playSfx } from "./sfx";
 import styles from "./ScenarioView.module.css";
 
 export function ScenarioView({
@@ -51,10 +52,22 @@ export function ScenarioView({
           <strong>{distortion} / 10</strong>
           {isGM && (
             <div className={styles.distControls}>
-              <button onClick={() => emit("gm:setDistortion", { value: distortion - 1 })}>
+              <button
+                onClick={() => {
+                  if (distortion <= 0) return;
+                  playSfx("distortion");
+                  emit("gm:setDistortion", { value: distortion - 1 });
+                }}
+              >
                 -
               </button>
-              <button onClick={() => emit("gm:setDistortion", { value: distortion + 1 })}>
+              <button
+                onClick={() => {
+                  if (distortion >= 10) return;
+                  playSfx("distortion");
+                  emit("gm:setDistortion", { value: distortion + 1 });
+                }}
+              >
                 +
               </button>
             </div>
@@ -76,9 +89,9 @@ export function ScenarioView({
                 ))}
               </select>
             </label>
-            <button onClick={() => setSetup(true)}>⚔ Ativar batalha</button>
+            <button onClick={() => setSetup(true)}>Novo Combate</button>
             {battleActive && (
-              <button onClick={() => emit("gm:resumeBattle")}>▶ Resumir batalha</button>
+              <button onClick={() => emit("gm:resumeBattle")}>Resumir Combate</button>
             )}
           </div>
         )}

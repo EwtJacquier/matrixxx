@@ -12,6 +12,7 @@ import type {
   GameObject,
   Hack,
   Initiative,
+  MusicTrack,
   Npc,
   Profession,
   Roll,
@@ -20,17 +21,19 @@ import type {
 } from "@/game/types";
 import { adjacencyMods, ruleOf } from "@/game/objects";
 import { canTarget } from "@/game/faction";
-import { inBand, weaponBand } from "@/game/weapons";
+import { FLANK_BONUS, isFlanked } from "@/game/flank";
+import { FREE_HANDS, FREE_HANDS_ID, inBand, resolveItem, weaponBand } from "@/game/weapons";
 import { adjustItem, itemQty } from "@/game/inventory";
 import { canReachCell } from "@/game/path";
 import { roll } from "@/game/dice";
-import { DISTORTION_DMG_PER_CHARGE, applyDamage, clampDistortion, improveState } from "@/game/rules";
+import { DISTORTION_DMG_PER_CHARGE, applyDamage, clampDistortion, dieDamageAfterState, improveState, stateMovePenalty } from "@/game/rules";
 import { SESSION_COOKIE, verifyToken } from "../auth/session";
 import { getUserById } from "../auth/users";
 import {
   getCharacters,
   getGame,
   getItems,
+  getMusic,
   getNpcs,
   refreshUsers,
   remove,
@@ -41,10 +44,15 @@ import {
   advanceTurn,
   appendLog,
   buildPublicState,
+  addEnemyToken,
+  addInitiativeEntry,
   bumpTurnTimer,
   endBattle,
+  playTrack,
   resumeBattle,
   setDistortion,
+  setMusicLoop,
+  stopMusic,
   dropFromInitiative,
   removeTokens,
   setInitiative,
@@ -187,6 +195,26 @@ export function registerSocket(io: IOServer): void {
       broadcast();
     });
 
+    socket.on(
+      "gm:addEnemy",
+      async ({ npcId, pos }: { npcId: string; pos: { x: number; y: number } }) => {
+        if (!isGM) return fail("Apenas o GM pode adicionar inimigos.");
+        await addEnemyToken(npcId, pos);
+        broadcast();
+      },
+    );
+
+    socket.on("gm:removeToken", async ({ tokenId }: { tokenId: string }) => {
+      if (!isGM) return fail("Apenas o GM pode remover tokens.");
+      const b = getGame().battle;
+      if (!b) return fail("Sem batalha ativa.");
+      const t = b.tokens.find((x) => x.id === tokenId);
+      if (t) await appendLog(`GM removeu ${t.label}.`);
+      const keep = b.initiative[b.turnIndex]?.tokenId ?? "";
+      await removeTokens([tokenId], keep);
+      broadcast();
+    });
+
     socket.on("gm:updateTokens", async ({ tokens }: { tokens: Token[] }) => {
       if (!isGM) return fail("Apenas o GM pode reposicionar tokens.");
       await updateTokens(tokens);
@@ -202,13 +230,38 @@ export function registerSocket(io: IOServer): void {
         if (!b) return fail("Sem batalha ativa.");
         const tok = b.tokens.find((t) => t.id === tokenId);
         if (!tok) return fail("Token inexistente.");
+        const wasDead = tok.state === "Morto";
         if (hp !== undefined && tok.maxHp !== undefined) {
           tok.hp = Math.max(0, Math.min(tok.maxHp, hp));
         } else if (hp !== undefined) {
           tok.hp = Math.max(0, hp);
         }
         if (st !== undefined) tok.state = st as Token["state"];
+        const nowDead = tok.state === "Morto";
+        const isUnit = tok.kind === "player" || tok.kind === "enemy";
+        const keep = b.initiative[b.turnIndex]?.tokenId ?? "";
+
+        // Reviver (Morto → vivo): rola iniciativa e reentra na ordem de turnos.
+        const reviving =
+          isUnit && wasDead && !nowDead && !b.initiative.some((i) => i.tokenId === tok.id);
+        let reviveRoll: Roll | null = null;
+        if (reviving) {
+          // Sem HP definido, volta com a vida cheia (não fica um "corpo" com 0 HP).
+          if (hp === undefined && (tok.hp ?? 0) <= 0 && tok.maxHp) tok.hp = tok.maxHp;
+          reviveRoll = roll("1d100", tok.label, `Iniciativa ${tok.label}`);
+        }
+
         await updateTokens(b.tokens);
+        if (reviveRoll) {
+          await addInitiativeEntry(tok.id, reviveRoll.total, tok.label);
+          await emitRoll(reviveRoll);
+          await appendLog(`${tok.label} voltou ao combate (iniciativa ${reviveRoll.total}).`);
+        }
+        // Morrer (vivo → Morto, via edição): vira corpo e sai da ordem de turnos.
+        if (isUnit && !wasDead && nowDead) {
+          await appendLog(`${tok.label} foi derrotado.`);
+          await dropFromInitiative([tok.id], keep);
+        }
         broadcast();
       },
     );
@@ -216,6 +269,29 @@ export function registerSocket(io: IOServer): void {
     socket.on("gm:advanceTurn", async ({ dir }: { dir: 1 | -1 }) => {
       if (!isGM) return fail("Apenas o GM controla os turnos.");
       await advanceTurn(dir);
+      broadcast();
+    });
+
+    // GM concede iniciativa (1d100) a um token que não está na ordem de turnos.
+    socket.on("gm:grantInitiative", async ({ tokenId }: { tokenId: string }) => {
+      if (!isGM) return fail("Apenas o GM controla os turnos.");
+      const b = getGame().battle;
+      if (!b) return fail("Sem batalha ativa.");
+      const tok = b.tokens.find((t) => t.id === tokenId);
+      if (!tok) return fail("Token inexistente.");
+      if (tok.kind !== "player" && tok.kind !== "enemy") {
+        return fail("Só combatentes entram na iniciativa.");
+      }
+      if (tok.state === "Morto") return fail("Token morto não entra na iniciativa.");
+      if (b.initiative.some((i) => i.tokenId === tokenId)) {
+        return fail("Esse token já está na ordem de turnos.");
+      }
+      const r = roll("1d100", tok.label, `Iniciativa ${tok.label}`);
+      const ok = await addInitiativeEntry(tokenId, r.total, tok.label);
+      if (ok) {
+        await emitRoll(r);
+        await appendLog(`${tok.label} entrou no combate (iniciativa ${r.total}).`);
+      }
       broadcast();
     });
 
@@ -291,13 +367,20 @@ export function registerSocket(io: IOServer): void {
       let r: Roll | null = null;
       const damages: { tokenId: string; amount: number; pos: { x: number; y: number }; notes?: string[] }[] = [];
       // Cargas de distorção gastas no ataque (+dano), limitadas ao disponível.
-      const charges = Math.max(0, Math.min(action.attackCharges ?? 0, actor.charges ?? 0));
+      // Armas com ataque só aceitam +1 carga; Mãos Livres (desarmado) é liberado.
+      let chargeCap = actor.charges ?? 0;
+      if (action.kind === "attack") {
+        const w = resolveItem(getItems(), action.detail);
+        const unarmed = !w || w.id === FREE_HANDS_ID;
+        if (!unarmed) chargeCap = Math.min(chargeCap, 1);
+      }
+      const charges = Math.max(0, Math.min(action.attackCharges ?? 0, chargeCap));
       const distBonus = charges * DISTORTION_DMG_PER_CHARGE;
 
       // Modificador de ATAQUE do ator por objetos adjacentes, a partir de actPos.
       const atkMod = adjacencyMods({ ...actor, pos: actPos }, b.tokens).attack;
 
-      const damageToken = (target: Token, base: number) => {
+      const damageToken = (target: Token, base: number, extraNotes: string[] = []) => {
         // Objeto destrutível (com HP): dano direto, sem defesa/estado.
         if (target.kind === "object") {
           if ((target.hp ?? 0) <= 0) return null;
@@ -322,7 +405,7 @@ export function registerSocket(io: IOServer): void {
         const dmg = res.applied; // dano real após defesa e penalidade de estado
         target.hp = res.hp;
         target.state = res.state;
-        const notes: string[] = [];
+        const notes: string[] = [...extraNotes];
         if (atkMod) notes.push(`ATK ${atkMod > 0 ? "+" : ""}${atkMod}`);
         if (totalDf) notes.push(`DEF ${totalDf}`);
         damages.push({
@@ -339,7 +422,7 @@ export function registerSocket(io: IOServer): void {
 
       if (action.kind === "attack") {
         const weaponId = action.detail;
-        const weapon = weaponId ? getItems().find((i) => i.id === weaponId) ?? null : null;
+        const weapon = resolveItem(getItems(), weaponId);
         // Munição: se a arma tem capacidade, precisa de munição carregada.
         if (weapon?.maxAmmo && weaponId) {
           const left = actor.ammo?.[weaponId] ?? 0;
@@ -360,7 +443,14 @@ export function registerSocket(io: IOServer): void {
             actor.ammo = { ...(actor.ammo ?? {}), [weaponId]: (actor.ammo?.[weaponId] ?? 0) - 1 };
           }
           const prof = professionDamageBonus(actor, weapon);
-          const base = Math.max(0, r.total + distBonus + atkMod + prof.bonus);
+          // Flanqueamento: +3 se houver aliado do atacante atrás do alvo.
+          const flanked = isFlanked({ ...actor, pos: actPos }, target, b.tokens);
+          const flankBonus = flanked ? FLANK_BONUS : 0;
+          // Penalidade de estado do atacante: incide SÓ no dano dos dados (mín. 0);
+          // o dano fixo da arma (r.flat) é preservado.
+          const dieAfter = dieDamageAfterState(r.total - r.flat, actor.state ?? "Disposto");
+          const statePenalty = r.total - r.flat - dieAfter;
+          const base = Math.max(0, dieAfter + r.flat + distBonus + atkMod + prof.bonus + flankBonus);
           const area = weapon?.area ?? 0;
           const affected = area
             ? b.tokens.filter(
@@ -370,11 +460,19 @@ export function registerSocket(io: IOServer): void {
                   manhattanT(target.pos, t.pos) <= area,
               )
             : [target];
-          for (const t of affected) damageToken(t, base);
+          // Penalidade de estado afeta todos os atingidos; flanqueamento só o alvo.
+          const stateNote = statePenalty > 0 ? [`ESTADO -${statePenalty}`] : [];
+          for (const t of affected) {
+            const notes = [...stateNote];
+            if (t.id === target.id && flanked) notes.push(`FLANCO +${FLANK_BONUS}`);
+            damageToken(t, base, notes);
+          }
           await appendLog(
             `${actor.label} atacou ${target.label}: ${base} de dano base` +
               (area ? ` (área ${area}, ${affected.length} alvos)` : "") +
               (atkMod ? ` [ataque ${atkMod > 0 ? "+" : ""}${atkMod}]` : "") +
+              (flanked ? ` [flanqueado +${FLANK_BONUS}]` : "") +
+              (statePenalty ? ` [estado -${statePenalty}]` : "") +
               (prof.note ? ` [${prof.note}]` : ""),
           );
         }
@@ -392,7 +490,9 @@ export function registerSocket(io: IOServer): void {
             const target = b.tokens.find((t) => t.id === action.targetId);
             if (target) {
               r = roll(rule.damage, actor.label, objTok.label);
-              const base = Math.max(0, r.total + distBonus + atkMod);
+              // Penalidade de estado do atacante só nos dados (preserva o fixo).
+              const dieAfter = dieDamageAfterState(r.total - r.flat, actor.state ?? "Disposto");
+              const base = Math.max(0, dieAfter + r.flat + distBonus + atkMod);
               const dmg = damageToken(target, base);
               await appendLog(`${actor.label} usou ${objTok.label} em ${target.label}: ${dmg} de dano`);
               used = true;
@@ -528,6 +628,32 @@ export function registerSocket(io: IOServer): void {
       },
     );
 
+    // --- Música compartilhada ---
+
+    // Qualquer cliente pede o áudio (data URL) de uma faixa sob demanda.
+    socket.on("music:track", ({ trackId }: { trackId: string }) => {
+      const t = getMusic().find((m) => m.id === trackId);
+      if (t) socket.emit("music:data", { id: t.id, src: t.src });
+    });
+
+    socket.on("gm:music:play", async ({ trackId }: { trackId: string }) => {
+      if (!isGM) return fail("Apenas o GM controla a música.");
+      await playTrack(trackId);
+      broadcast();
+    });
+
+    socket.on("gm:music:loop", async ({ loop }: { loop: boolean }) => {
+      if (!isGM) return fail("Apenas o GM controla a música.");
+      await setMusicLoop(loop);
+      broadcast();
+    });
+
+    socket.on("gm:music:stop", async () => {
+      if (!isGM) return fail("Apenas o GM controla a música.");
+      await stopMusic();
+      broadcast();
+    });
+
     // --- Cadastros (GM) ---
 
     socket.on(
@@ -543,6 +669,10 @@ export function registerSocket(io: IOServer): void {
       "catalog:remove",
       async ({ kind, id }: { kind: CrudKind; id: string }) => {
         if (!isGM) return fail("Apenas o GM administra os cadastros.");
+        // Remover a faixa que está tocando agora também para a música.
+        if (kind === "music" && getGame().nowPlaying?.trackId === id) {
+          await stopMusic();
+        }
         await remove(kind, id);
         broadcast();
       },
@@ -588,7 +718,8 @@ type CrudKind =
   | "disguises"
   | "npcs"
   | "objects"
-  | "battleTemplates";
+  | "battleTemplates"
+  | "music";
 type AnyEntity =
   | Scenario
   | Profession
@@ -597,7 +728,8 @@ type AnyEntity =
   | Disguise
   | Npc
   | GameObject
-  | BattleTemplate;
+  | BattleTemplate
+  | MusicTrack;
 
 function manhattanT(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
@@ -611,11 +743,13 @@ function ownsToken(token: Token, userId: string): boolean {
 
 /** Movimento base do token (ficha do jogador, ou 2 para inimigos). */
 function baseMv(token: Token): number {
+  let raw = 2;
   if (token.characterId) {
     const ch = getCharacters().find((c) => c.id === token.characterId);
-    if (ch) return ch.mv;
+    if (ch) raw = ch.mv;
   }
-  return 2;
+  // Penalidade de movimento por estado (intercalada com a de dano).
+  return Math.max(0, raw - stateMovePenalty(token.state ?? "Disposto"));
 }
 
 /** Defesa do token: vinda dos acessórios equipados na ficha do jogador. */
@@ -640,7 +774,7 @@ function professionDamageBonus(
   if (!actor.characterId) return { bonus: 0 };
   const ch = getCharacters().find((c) => c.id === actor.characterId);
   if (!ch) return { bonus: 0 };
-  const isUnarmed = !weapon || weapon.id === "wpn_maos_livres";
+  const isUnarmed = !weapon || weapon.id === FREE_HANDS_ID;
   const isFirearm = !!weapon && (weapon.range ?? 1) >= 2;
   if (isUnarmed && ch.roles.includes("prof_pugilista")) {
     return { bonus: 2, note: "Pugilista +2" };
@@ -652,9 +786,9 @@ function professionDamageBonus(
 }
 
 function resolveWeaponFormula(actor: Token, detail?: string): string {
-  // detail pode ser o id de um item/arma; senão usa mãos livres.
+  // detail pode ser o id de um item/arma (inclui Mãos Livres embutido).
   if (detail) {
-    const item = getItems().find((i) => i.id === detail);
+    const item = resolveItem(getItems(), detail);
     if (item?.damage) return item.damage;
   }
   // Inimigo do catálogo: usa a primeira arma cadastrada (ou dano legado).
@@ -662,11 +796,12 @@ function resolveWeaponFormula(actor: Token, detail?: string): string {
     const npc = getNpcs().find((n) => n.id === actor.npcId);
     const firstWeaponId = npc?.weapons?.[0];
     if (firstWeaponId) {
-      const w = getItems().find((i) => i.id === firstWeaponId);
+      const w = resolveItem(getItems(), firstWeaponId);
       if (w?.damage) return w.damage;
     }
     if (npc?.damage) return npc.damage;
   }
-  return "1d4";
+  // Sem arma (mãos livres) → dano embutido fixo.
+  return FREE_HANDS.damage ?? "1d4+2";
 }
 

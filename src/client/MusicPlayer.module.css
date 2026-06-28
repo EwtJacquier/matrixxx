@@ -1,0 +1,196 @@
+/* Player de música no centro do header (posição absoluta para centralizar
+   independente do conteúdo das laterais). */
+.player {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 46vw;
+  padding: 4px 10px;
+  border: 1px solid var(--green-faint);
+  background: var(--bg-soft);
+  border-radius: 2px;
+}
+
+.info {
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  max-width: 220px;
+}
+
+.title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  text-shadow: 0 0 6px var(--green-glow);
+}
+
+.time {
+  font-size: 11px;
+  color: var(--green-dim);
+}
+
+.idle {
+  font-size: 12px;
+  color: var(--green-dim);
+  white-space: nowrap;
+}
+
+.bar {
+  width: 90px;
+  height: 4px;
+  background: var(--green-faint);
+  position: relative;
+  overflow: hidden;
+}
+
+.barFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+  transition: width 0.5s linear;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.controls button {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.controls .on {
+  background: var(--green-faint);
+  border-color: var(--green);
+  color: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+
+.warn {
+  color: var(--amber) !important;
+  border-color: var(--amber) !important;
+}
+
+.vol {
+  width: 70px;
+  padding: 0;
+  accent-color: var(--green);
+}
+
+/* --- Modal de escolha/cadastro de músicas --- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.modal {
+  width: min(560px, 92vw);
+  max-height: 84vh;
+  overflow: auto;
+  border: 1px solid var(--green);
+  background: var(--bg);
+  box-shadow: 0 0 24px var(--green-glow);
+  padding: 16px;
+}
+
+.modalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.modalHead h3 {
+  margin: 0;
+}
+
+.upload {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--green-faint);
+  padding: 10px;
+  margin-bottom: 14px;
+}
+
+.upload label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--green-dim);
+}
+
+.uploadFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.track {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--green-faint);
+}
+
+.trackOn {
+  border-color: var(--green);
+  background: var(--green-faint);
+}
+
+.trackName {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trackDur {
+  color: var(--green-dim);
+  font-size: 12px;
+}
+
+.track button {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.modalFoot {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 900px) {
+  .player {
+    position: static;
+    transform: none;
+    max-width: 100%;
+    order: 3;
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+}

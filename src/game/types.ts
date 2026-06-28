@@ -208,6 +208,10 @@ export interface BattleState {
   tokens: Token[];
   initiative: Initiative[]; // ordenado desc por value
   turnIndex: number; // índice na ordem de iniciativa
+  /** id monotônico do turno atual; muda só em transição real de turno (avançar/
+   * retroceder/iniciar ordem). Usado pelo cliente para reiniciar o fluxo sem
+   * confundir com mudanças de turnIndex causadas por mortes/remoções no meio do turno. */
+  turnSeq: number;
   /** timestamp (ms) em que o turno atual estoura e pula automático. */
   turnEndsAt: number;
   /** snapshot por turno para avançar/retroceder. */
@@ -244,12 +248,33 @@ export interface Roll {
 
 export type GameMode = "scenario" | "battle";
 
+/** Faixa de música (MP3) cadastrada pelo GM. `src` é um data URL (audio/mpeg). */
+export interface MusicTrack {
+  id: string;
+  name: string;
+  duration: number; // segundos
+  src: string; // data URL — NÃO vai no PublicState (pesado); buscado sob demanda
+}
+
+/** Metadados de música transmitidos a todos (sem o áudio pesado). */
+export type MusicMeta = Omit<MusicTrack, "src">;
+
+/** Música tocando agora, sincronizada pelo relógio do servidor. */
+export interface NowPlaying {
+  trackId: string;
+  /** epoch (ms) em que a faixa começou — a posição atual deriva disto. */
+  startedAt: number;
+  loop: boolean;
+}
+
 export interface GameState {
   mode: GameMode;
   scenarioId: string | null;
   distortion: number; // 0..10 (espelha o do cenário ativo, ajustável em tempo real)
   battle: BattleState | null;
   lastRoll: Roll | null;
+  /** música compartilhada tocando na mesa (null = nenhuma). */
+  nowPlaying: NowPlaying | null;
 }
 
 /** Estado público enviado aos clientes (sem hashes de senha). */
@@ -264,5 +289,7 @@ export interface PublicState {
   objects: GameObject[];
   battleTemplates: BattleTemplate[];
   characters: Character[];
+  /** catálogo de músicas — só metadados (o áudio é buscado sob demanda). */
+  music: MusicMeta[];
   players: { id: string; email: string; role: Role }[];
 }

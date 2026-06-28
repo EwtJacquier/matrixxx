@@ -9,11 +9,15 @@ import type {
   Disguise,
   GameObject,
   Hack,
+  MusicMeta,
+  MusicTrack,
   Npc,
   Profession,
   Scenario,
 } from "@/game/types";
 import { cropToSquareDataUrl, fileToDataUrl } from "./image";
+import { audioDuration, fmtTime } from "./audio";
+import { FREE_HANDS_ID } from "@/game/weapons";
 import styles from "./CatalogAdmin.module.css";
 
 type Kind =
@@ -24,7 +28,8 @@ type Kind =
   | "professions"
   | "npcs"
   | "objects"
-  | "battleTemplates";
+  | "battleTemplates"
+  | "music";
 
 const TABS: { kind: Kind; label: string }[] = [
   { kind: "scenarios", label: "Cenários" },
@@ -35,10 +40,38 @@ const TABS: { kind: Kind; label: string }[] = [
   { kind: "professions", label: "Profissões" },
   { kind: "hacks", label: "Hacks" },
   { kind: "disguises", label: "Disfarces" },
+  { kind: "music", label: "Músicas" },
 ];
 
 function uid(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+const DIE_RE = /^\s*\d+\s*d\s*\d+\s*$/i;
+
+/** Separa uma fórmula "1d6+2" em dado ("1d6") e dano fixo ("2"). */
+function splitDamage(formula?: string): { die: string; flat: string } {
+  if (!formula) return { die: "", flat: "" };
+  const m = /^\s*(\d+\s*d\s*\d+)\s*([+-]\s*\d+)?\s*$/i.exec(formula);
+  if (!m) return { die: formula.trim(), flat: "" };
+  const die = m[1].replace(/\s+/g, "");
+  const flat = m[2] ? m[2].replace(/\s+/g, "").replace(/^\+/, "") : "";
+  return { die, flat };
+}
+
+/** Junta dado + dano fixo numa fórmula. Mantém o dado durante a edição. */
+function combineDamage(die: string, flat: string): string {
+  const d = die.trim();
+  if (!d) return "";
+  const n = Number(flat);
+  if (flat === "" || Number.isNaN(n) || n === 0) return d;
+  return `${d}${n > 0 ? "+" : ""}${n}`;
+}
+
+/** Arma exige dado válido + dano fixo obrigatório (≥ 1). */
+function validWeaponDamage(formula?: string): boolean {
+  const { die, flat } = splitDamage(formula);
+  return DIE_RE.test(die) && Number(flat) >= 1;
 }
 
 export function CatalogAdmin() {
@@ -112,6 +145,9 @@ export function CatalogAdmin() {
           onSave={upsert}
           onRemove={remove}
         />
+      )}
+      {tab === "music" && (
+        <MusicForm items={state.music} onSave={upsert} onRemove={remove} />
       )}
     </div>
   );
@@ -267,13 +303,39 @@ function ItemForm({
         </label>
         {draft.category === "weapon" && (
           <>
-            <label>
-              Dano (ex.: 2d6+2)
-              <input
-                value={draft.damage ?? ""}
-                onChange={(e) => setDraft({ ...draft, damage: e.target.value })}
-              />
-            </label>
+            <div className={styles.row2}>
+              <label>
+                Dado (ex.: 1d6)
+                <input
+                  value={splitDamage(draft.damage).die}
+                  placeholder="1d6"
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      damage: combineDamage(e.target.value, splitDamage(draft.damage).flat),
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Dano fixo (obrigatório)
+                <input
+                  type="number"
+                  min={1}
+                  value={splitDamage(draft.damage).flat}
+                  placeholder="2"
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      damage: combineDamage(splitDamage(draft.damage).die, e.target.value),
+                    })
+                  }
+                />
+              </label>
+            </div>
+            {!validWeaponDamage(draft.damage) && (
+              <p className="danger">Toda arma precisa de dado + dano fixo (≥ 1). Ex.: 1d6 + 2.</p>
+            )}
             <div className={styles.row2}>
               <label>
                 Alcance mín.
@@ -343,8 +405,10 @@ function ItemForm({
         </label>
         <div className={styles.formBtns}>
           <button
+            disabled={!draft.name || (draft.category === "weapon" && !validWeaponDamage(draft.damage))}
             onClick={() => {
               if (!draft.name) return;
+              if (draft.category === "weapon" && !validWeaponDamage(draft.damage)) return;
               onSave(draft);
               setDraft({ ...blank, id: uid("itm") });
             }}
@@ -368,13 +432,13 @@ function ItemForm({
               className={listTab === cat ? styles.active : ""}
               onClick={() => setListTab(cat)}
             >
-              {label} ({items.filter((i) => i.category === cat).length})
+              {label} ({items.filter((i) => i.category === cat && i.id !== FREE_HANDS_ID).length})
             </button>
           ))}
         </div>
         <List>
           {items
-            .filter((it) => it.category === listTab)
+            .filter((it) => it.category === listTab && it.id !== FREE_HANDS_ID)
             .map((it) => (
               <Row
                 key={it.id}
@@ -418,7 +482,9 @@ function NpcForm({
 }) {
   const blank: Npc = { id: uid("npc"), name: "", hp: 10, weapons: [], description: "" };
   const [draft, setDraft] = useState<Npc>(blank);
-  const weaponList = catalogItems.filter((i) => i.category === "weapon");
+  const weaponList = catalogItems.filter(
+    (i) => i.category === "weapon" && i.id !== FREE_HANDS_ID,
+  );
 
   function toggleWeapon(id: string) {
     setDraft((d) => {
@@ -833,6 +899,91 @@ function ProfessionForm({
             onEdit={() => setDraft(p)}
             onRemove={() => onRemove(p.id)}
           />
+        ))}
+      </List>
+    </div>
+  );
+}
+
+// --- Músicas (upload de MP3) ---
+function MusicForm({
+  items,
+  onSave,
+  onRemove,
+}: {
+  items: MusicMeta[];
+  onSave: (e: MusicTrack) => void;
+  onRemove: (id: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [src, setSrc] = useState("");
+  const [duration, setDuration] = useState(0);
+  const [busy, setBusy] = useState(false);
+
+  async function pickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setBusy(true);
+    const dataUrl = await fileToDataUrl(f);
+    const d = await audioDuration(dataUrl);
+    setSrc(dataUrl);
+    setDuration(d);
+    if (!name) setName(f.name.replace(/\.[^.]+$/, ""));
+    setBusy(false);
+  }
+
+  function reset() {
+    setName("");
+    setSrc("");
+    setDuration(0);
+  }
+
+  return (
+    <div className={styles.split}>
+      <div className={styles.form}>
+        <label>
+          Arquivo MP3
+          <input type="file" accept="audio/mpeg,audio/mp3,.mp3" onChange={pickFile} />
+        </label>
+        <label>
+          Nome
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="nome da faixa"
+          />
+        </label>
+        <p className="muted">
+          {busy ? "lendo arquivo…" : src ? `áudio carregado · ${fmtTime(duration)}` : "nenhum arquivo"}
+        </p>
+        <div className={styles.formBtns}>
+          <button
+            disabled={!name || !src || busy}
+            onClick={() => {
+              if (!name || !src) return;
+              onSave({ id: uid("mus"), name, duration, src });
+              reset();
+            }}
+          >
+            Salvar
+          </button>
+          <button onClick={reset}>Limpar</button>
+        </div>
+      </div>
+      <List>
+        {items.length === 0 && <p className="muted">Nenhuma música cadastrada.</p>}
+        {items.map((m) => (
+          <div key={m.id} className={styles.row}>
+            <div className={styles.rowText}>
+              <strong>{m.name}</strong>
+              <span>{fmtTime(m.duration)}</span>
+            </div>
+            <div className={styles.rowActions}>
+              <button className="danger" onClick={() => onRemove(m.id)}>
+                x
+              </button>
+            </div>
+          </div>
         ))}
       </List>
     </div>

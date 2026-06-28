@@ -127,7 +127,6 @@
   left: 8px;
   bottom: 8px;
   width: 280px;
-  max-height: 42%;
   overflow-y: auto;
   z-index: 20;
 }
@@ -374,7 +373,7 @@
   inset: 12%;
   transform-style: preserve-3d;
   cursor: pointer;
-  --ch: calc(var(--cell) * 0.6);
+  --ch: calc(var(--cell) * 0.2);
   --cc: var(--green);
 }
 .cube_player { --cc: #00ff66; }
@@ -513,12 +512,65 @@
   padding: 0 3px;
 }
 
-.cubeDmg {
-  font-size: 16px;
+.cubeFlanked {
+  width: min-content;
+  white-space: nowrap;
+  align-self: center;
+  font-size: 9px;
   font-weight: bold;
+  letter-spacing: 0.5px;
+  text-align: center;
+  color: #fff;
+  background: var(--red);
+  border: 1px solid var(--red);
+  padding: 0 3px;
+  animation: flankPulse 1s ease-in-out infinite;
+}
+
+@keyframes flankPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.cubeDmg {
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: bold;
+  text-align: center;
   color: var(--red);
-  text-shadow: 0 0 4px #000;
-  animation: dmgFloat 1.4s ease-out forwards;
+  background: #000;
+  border: 2px solid var(--red);
+  border-radius: 3px;
+  padding: 2px 12px;
+  text-shadow: 0 0 6px #000;
+  box-shadow: 0 0 12px rgba(255, 68, 68, 0.55);
+  z-index: 12;
+  animation: dmgRise 2.4s ease-out forwards;
+}
+
+/* Sobe pouco (fica mais centralizado no token) e segura visível por mais tempo. */
+@keyframes dmgRise {
+  0% {
+    transform: translateY(25%) scale(0.6);
+    opacity: 0;
+  }
+  12% {
+    transform: translateY(0) scale(1.3);
+    opacity: 1;
+  }
+  78% {
+    transform: translateY(-28%) scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-52%) scale(1);
+    opacity: 0;
+  }
 }
 
 .chip {
@@ -615,7 +667,7 @@
 
 .dmgNote {
   display: block;
-  font-size: 9px;
+  font-size: 12px;
   color: var(--amber);
   text-shadow: none;
 }
@@ -767,15 +819,10 @@
 
 .logBody {
   font-size: 12px;
-  max-height: 480px;
-  overflow-y: auto;
   color: var(--green-dim);
   display: flex;
   flex-direction: column;
   gap: 2px;
-  /* scrollbar tematizada (Firefox) */
-  scrollbar-width: thin;
-  scrollbar-color: var(--green-dim) #000;
   padding-right: 4px;
 }
 
@@ -855,7 +902,7 @@
 
 .initiative ol {
   margin: 0;
-  padding-left: 20px;
+  padding-left: 0;
 }
 
 .initiative li {
@@ -933,6 +980,15 @@
 
 .chargeCount {
   color: var(--amber);
+}
+
+.npcSelect {
+  width: 100%;
+  background: #000;
+  color: var(--green);
+  border: 1px solid var(--green-faint);
+  padding: 4px 6px;
+  font: inherit;
 }
 
 .stepper {
@@ -1073,6 +1129,7 @@
   border-color: var(--green);
   box-shadow: 0 0 8px var(--green-glow);
 }
+
 
 
 .cmdHint {

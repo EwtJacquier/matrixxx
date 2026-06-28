@@ -4,13 +4,38 @@
 import { STATES, type CharState } from "./types";
 
 /**
- * Penalidade FLAT de dano recebido por estado avançado: +2 de dano para cada
- * passo de estado acima de "Disposto" (Machucado +2, Incapacitado +4, …).
+ * Penalidades por estado avançado, INTERCALADAS a cada passo acima de "Disposto":
+ *   Machucado       → -2 dano
+ *   Incapacitado    → -1 movimento
+ *   Perto da Morte  → -2 dano
+ *   (Morto)         → -1 movimento (terminal, sem ações)
+ * Acumulativas: os passos de dano somam -2 e os de movimento somam -1.
+ * A penalidade de dano afeta SÓ o dano dos dados (nunca < 0); o dano fixo da arma
+ * é preservado, para o personagem ferido não ficar fraco demais.
  */
 export const STATE_DAMAGE_PENALTY = 2;
+export const STATE_MOVE_PENALTY = 1;
 
 export function stateIndex(state: CharState): number {
   return STATES.indexOf(state);
+}
+
+/** Penalidade de dano acumulada do atacante (passos ímpares: Machucado, Perto da Morte). */
+export function stateDamagePenalty(state: CharState): number {
+  return Math.ceil(stateIndex(state) / 2) * STATE_DAMAGE_PENALTY;
+}
+
+/** Penalidade de movimento acumulada (passos pares: Incapacitado, Morto). */
+export function stateMovePenalty(state: CharState): number {
+  return Math.floor(stateIndex(state) / 2) * STATE_MOVE_PENALTY;
+}
+
+/**
+ * Aplica a penalidade de estado do atacante ao dano dos dados (nunca < 0).
+ * `dieSum` é só a soma dos dados (sem o dano fixo da arma).
+ */
+export function dieDamageAfterState(dieSum: number, attackerState: CharState): number {
+  return Math.max(0, dieSum - stateDamagePenalty(attackerState));
 }
 
 export function nextState(state: CharState): CharState {
@@ -41,9 +66,11 @@ export interface DamageResult {
 /**
  * Aplica dano a um alvo.
  * - `df` ignora X pontos de dano (defesa do acessório).
- * - dano é multiplicado pelo estado atual.
  * - quando o HP chega a 0, o estado piora e o HP volta a 100% do máximo,
  *   até atingir "Morto" (terminal).
+ *
+ * A penalidade por estado NÃO é aplicada aqui — ela incide no dano dos dados do
+ * ATACANTE (ver `dieDamageAfterState`), antes de chegar como `rawDamage`.
  */
 export function applyDamage(
   hp: number,
@@ -56,10 +83,7 @@ export function applyDamage(
     return { hp: 0, maxHp, state, worsened: 0, applied: 0 };
   }
 
-  const mitigated = Math.max(0, rawDamage - Math.max(0, df));
-  // Penalidade flat conforme o estado atual (+2 por estado avançado).
-  const penalty = STATE_DAMAGE_PENALTY * stateIndex(state);
-  const applied = mitigated + penalty;
+  const applied = Math.max(0, rawDamage - Math.max(0, df));
 
   let curHp = hp;
   let curState = state;
@@ -90,15 +114,17 @@ export function applyDamage(
 /**
  * Distorção por CARGA (recurso do personagem em batalha):
  * - máximo de cargas = nível + 1 (lvl0=1, lvl1=2, lvl2=3, lvl3=4).
- * - no início do seu turno, recupera `nível` cargas (lvl0=0, lvl1=1, lvl2=2, lvl3=3).
+ * - no início do seu turno, recupera SEMPRE 1 carga (independente do nível),
+ *   limitada ao máximo do nível.
  * Cada carga pode ser gasta para +1 casa de movimento OU +DMG no ataque.
  */
 export function maxCharges(level: number): number {
   return level + 1;
 }
 
-export function chargeRegen(level: number): number {
-  return level;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function chargeRegen(_level: number): number {
+  return 1;
 }
 
 /** Dano extra por carga gasta no ataque. */

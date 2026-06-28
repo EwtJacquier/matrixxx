@@ -4,10 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useGame, type DamagePopup } from "./GameProvider";
 import { STATES, type ActionKind, type Token } from "@/game/types";
 import { adjacencyMods, isActionRule, objectBadge, ruleOf } from "@/game/objects";
-import { bandLabel, inBand, weaponBand } from "@/game/weapons";
+import { FREE_HANDS, FREE_HANDS_ID, bandLabel, inBand, resolveItem, weaponBand } from "@/game/weapons";
 import { canTarget } from "@/game/faction";
+import { isFlanked } from "@/game/flank";
 import { reachableCells } from "@/game/path";
-import { DISTORTION_DMG_PER_CHARGE } from "@/game/rules";
+import { DISTORTION_DMG_PER_CHARGE, stateMovePenalty } from "@/game/rules";
+import { playSfx } from "./sfx";
 import styles from "./BattleView.module.css";
 
 /** Distância em casas: diagonal não é adjacente (custa +1). */
@@ -91,9 +93,15 @@ export function BattleView() {
     | "inspect"
     | "confirmAttack"
     | "confirmEndTurn"
-    | "confirmEndBattle";
+    | "confirmEndBattle"
+    | "confirmAddEnemy"
+    | "confirmRemoveEnemy";
   const [nav, setNav] = useState<Nav>("root");
+  // GM: NPC selecionado para adicionar no inspecionar (casa vazia).
+  const [addNpcId, setAddNpcId] = useState<string>("");
   const [menuIndex, setMenuIndex] = useState(0);
+  // Evita encerrar o turno duas vezes (vários caminhos podem chamar endTurn).
+  const endedRef = useRef(false);
   // Câmera do tabuleiro: zoom (1..1.5) e pan (px, 0 = centralizado).
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -117,10 +125,14 @@ export function BattleView() {
     setAttackCharges(0);
     setNav("root");
     setMenuIndex(0);
+    endedRef.current = false;
     // Ao iniciar/trocar o turno, reseta o inspetor.
     setInspectId(null);
     setCursor(currentActor?.pos ?? { x: 0, y: 0 });
-  }, [currentActor?.id, battle?.turnIndex]);
+    // Dispara só em transição real de turno (turnSeq), não quando turnIndex muda
+    // por morte/remoção de um token no meio do turno do ator atual.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [battle?.turnSeq]);
 
   // nav controla a fase: ações/alvo = "action"; menu raiz/mover = "move".
   // Também zera o índice do menu ao trocar de tela.
@@ -151,9 +163,11 @@ export function BattleView() {
   const actorPos = currentActor?.pos ?? { x: 0, y: 0 };
 
   const baseMv = (() => {
-    if (!currentActor?.characterId) return 2;
-    const ch = state.characters.find((c) => c.id === currentActor.characterId);
-    return ch?.mv ?? 2;
+    const raw = currentActor?.characterId
+      ? state.characters.find((c) => c.id === currentActor.characterId)?.mv ?? 2
+      : 2;
+    // Penalidade de movimento por estado (intercalada com a de dano).
+    return Math.max(0, raw - stateMovePenalty(currentActor?.state ?? "Disposto"));
   })();
   const availableCharges = currentActor?.charges ?? 0;
 
@@ -191,7 +205,7 @@ export function BattleView() {
     // Mãos Livres é a opção padrão (valor vazio); não repetir na lista.
     const uniq = Array.from(new Set(ids));
     return state.items.filter(
-      (i) => i.category === "weapon" && i.id !== "wpn_maos_livres" && uniq.includes(i.id),
+      (i) => i.category === "weapon" && i.id !== FREE_HANDS_ID && uniq.includes(i.id),
     );
   })();
 
@@ -207,6 +221,11 @@ export function BattleView() {
   const effectiveWeaponId = myWeapons.some((w) => w.id === weaponId) ? weaponId : "";
   const selectedWeapon = state.items.find((i) => i.id === effectiveWeaponId) ?? null;
   const weaponRangeBand = weaponBand(selectedWeapon);
+  // Distorção no ATAQUE: armas aceitam só +1 carga; Mãos Livres (id vazio) é liberado.
+  const attackChargeMax = effectiveWeaponId ? 1 : availableCharges;
+  // Distorção de ataque só fica disponível APÓS escolher a arma (alvo/confirmação),
+  // não durante a seleção de arma.
+  const inAttackFlow = nav === "target" || nav === "confirmAttack";
 
   // Posição "de onde o ator vai agir": a casa encenada (staging local) ou a real.
   // O movimento NÃO é enviado ao servidor até confirmar a ação/encerrar o turno,
@@ -338,6 +357,25 @@ export function BattleView() {
       return p.x === x && p.y === y;
     });
 
+  // Flanqueamento (visível a TODOS): a partir da posição encenada do ator atual,
+  // quais alvos atingíveis por uma arma usável estão flanqueados (aliado atrás).
+  // Aparece imediatamente ao mover, mesmo durante o planejamento.
+  const flankedIds = (() => {
+    if (!currentActor) return new Set<string>();
+    const aPos = displayPos(currentActor);
+    const attacker = { ...currentActor, pos: aPos } as Token;
+    return new Set(
+      battle.tokens
+        .filter((t) => {
+          if (t.id === currentActor.id || !canTarget(currentActor, t)) return false;
+          const d = manhattan(aPos, t.pos);
+          if (!myBands.some((b) => inBand(d, b))) return false; // precisa de arma válida
+          return isFlanked(attacker, { ...t, pos: t.pos }, battle.tokens);
+        })
+        .map((t) => t.id),
+    );
+  })();
+
   const inspected = inspectId ? battle.tokens.find((t) => t.id === inspectId) ?? null : null;
   // Inspetor: no modo inspecionar segue o cursor; ao mirar, mostra o alvo;
   // senão o token clicado, ou o ator do turno atual.
@@ -350,22 +388,35 @@ export function BattleView() {
 
   function clickCell(x: number, y: number) {
     if (phase !== "move" || !controlsActor) return;
-    if (reachable(x, y) || (x === actorPos.x && y === actorPos.y)) {
-      setStagedPos({ x, y });
-    }
+    if (!(reachable(x, y) || (x === actorPos.x && y === actorPos.y))) return;
+    const cur = stagedPos ?? actorPos;
+    if (x === cur.x && y === cur.y) return;
+    setStagedPos({ x, y });
+    playSfx("move");
   }
 
   // Envia o movimento ao servidor (commit) se o ator saiu do lugar.
-  function commitMove() {
+  function commitMove(posOverride?: { x: number; y: number }) {
     if (!currentActor) return;
-    if (stagedPos && (stagedPos.x !== actorPos.x || stagedPos.y !== actorPos.y)) {
-      emit("player:moveToken", { tokenId: currentActor.id, pos: stagedPos, moveCharges });
+    const pos = posOverride ?? stagedPos;
+    if (pos && (pos.x !== actorPos.x || pos.y !== actorPos.y)) {
+      emit("player:moveToken", { tokenId: currentActor.id, pos, moveCharges });
     }
   }
 
-  function endTurn() {
-    commitMove();
+  function endTurn(posOverride?: { x: number; y: number }) {
+    if (endedRef.current) return;
+    endedRef.current = true;
+    commitMove(posOverride);
     emit("player:endTurn");
+  }
+
+  // Sair do passo de movimento: se o ator JÁ AGIU e se afastou da casa inicial,
+  // o movimento pós-ação é único e encerra o turno (só dá pra movimentar a partir
+  // da casa onde o turno começou). Senão, volta ao menu.
+  function exitMove() {
+    if (acted && hasMoved) endTurn();
+    else setNav("root");
   }
 
   // Passo 1 → Passo 2 (não envia o movimento ainda; só vai no commit da ação).
@@ -463,11 +514,17 @@ export function BattleView() {
               const ammoLeft = w?.maxAmmo ? currentActor!.ammo?.[w.id] ?? 0 : null;
               return {
                 key: o.id || "maos",
-                label: w ? w.name : "Mãos Livres",
+                label: w ? w.name : FREE_HANDS.name,
                 meta: w
                   ? `${w.damage} · alc ${bandLabel(weaponBand(w))}${w.area ? ` · área ${w.area}` : ""}${ammoLeft !== null ? ` · ⦿${ammoLeft}/${w.maxAmmo}` : ""}`
-                  : "1d4 · alc 1",
-                run: () => { setWeaponId(o.id); setTargetId(""); goTarget(); },
+                  : `${FREE_HANDS.damage} · alc ${bandLabel(weaponBand(FREE_HANDS))}`,
+                run: () => {
+                  setWeaponId(o.id);
+                  setTargetId("");
+                  // Arma limita a distorção de ataque a 1; mãos livres não.
+                  setAttackCharges((c) => Math.min(c, o.id ? 1 : availableCharges));
+                  goTarget();
+                },
               };
             }),
             backItem(back),
@@ -553,7 +610,7 @@ export function BattleView() {
             if (w.maxAmmo) parts.push(`munição ⦿${currentActor!.ammo?.[w.id] ?? 0}/${w.maxAmmo}`);
             note = `${w.name} — ${parts.join(" · ")}`;
           } else {
-            note = "Mãos Livres — dano 1d4 · alcance 1";
+            note = `${FREE_HANDS.name} — dano ${FREE_HANDS.damage} · alcance ${bandLabel(weaponBand(FREE_HANDS))}`;
           }
         } else if (actionKind === "special" && actionObject) {
           const rl = ruleOf(actionObject);
@@ -609,12 +666,56 @@ export function BattleView() {
             { key: "no", label: "Não", run: () => setNav("root") },
           ],
         };
+      case "confirmAddEnemy": {
+        const npcId = addNpcId || state!.npcs[0]?.id || "";
+        const npc = state!.npcs.find((n) => n.id === npcId);
+        return {
+          title: "Adicionar inimigo?",
+          note: npc
+            ? `${npc.name} na casa (${cursor.x + 1}, ${cursor.y + 1})`
+            : undefined,
+          back: () => setNav("inspect"),
+          items: [
+            {
+              key: "yes",
+              label: "Sim, adicionar",
+              run: () => {
+                if (npcId) emit("gm:addEnemy", { npcId, pos: { x: cursor.x, y: cursor.y } });
+                setNav("inspect");
+              },
+            },
+            { key: "no", label: "Não", run: () => setNav("inspect") },
+          ],
+        };
+      }
+      case "confirmRemoveEnemy": {
+        const rt = battle!.tokens.find((t) => t.pos.x === cursor.x && t.pos.y === cursor.y);
+        return {
+          title: "Remover do mapa?",
+          note: rt ? `${rt.label} na casa (${cursor.x + 1}, ${cursor.y + 1})` : undefined,
+          back: () => setNav("inspect"),
+          items: [
+            {
+              key: "yes",
+              label: "Sim, remover",
+              disabled: !rt,
+              run: () => {
+                if (rt) emit("gm:removeToken", { tokenId: rt.id });
+                setNav("inspect");
+              },
+            },
+            { key: "no", label: "Não", run: () => setNav("inspect") },
+          ],
+        };
+      }
       case "root":
       default:
         return {
           title: "Turno",
           items: [
-            { key: "move", label: "Mover", run: () => { setMenuIndex(0); setNav("move"); } },
+            // Já agiu E já saiu da casa inicial: o movimento foi consumido (só dá
+            // pra movimentar a partir da casa onde o turno começou).
+            { key: "move", label: "Mover", disabled: acted && hasMoved, run: () => { setMenuIndex(0); setNav("move"); } },
             { key: "act", label: "Agir", disabled: acted || !canAct, run: () => { setMenuIndex(0); setNav("act"); } },
             { key: "inspect", label: "Inspecionar", run: () => { setCursor(stagedPos ?? actorPos); setNav("inspect"); } },
             { key: "end", label: "Encerrar", run: () => { setMenuIndex(0); setNav("confirmEndTurn"); } },
@@ -638,14 +739,16 @@ export function BattleView() {
   }, [nav, weaponOptions.length]);
 
   // Move o token DIRETO 1 casa na direção (recalcula alvos ao vivo).
-  function stepMove(dx: number, dy: number) {
+  // Retorna true se a casa encenada mudou (para o efeito sonoro de movimento).
+  function stepMove(dx: number, dy: number): boolean {
     const p = stagedPos ?? actorPos;
     const nx = p.x + dx;
     const ny = p.y + dy;
-    if (nx < 0 || ny < 0 || nx >= grid || ny >= grid) return;
-    if (reachable(nx, ny) || (nx === actorPos.x && ny === actorPos.y)) {
-      setStagedPos({ x: nx, y: ny });
-    }
+    if (nx < 0 || ny < 0 || nx >= grid || ny >= grid) return false;
+    if (!(reachable(nx, ny) || (nx === actorPos.x && ny === actorPos.y))) return false;
+    if (nx === p.x && ny === p.y) return false;
+    setStagedPos({ x: nx, y: ny });
+    return true;
   }
 
   // Cargas mínimas de movimento para a casa encenada continuar alcançável
@@ -667,8 +770,19 @@ export function BattleView() {
       const cap = availableCharges - attackCharges; // sobra após o que já vai no ataque
       setMoveCharges((c) => Math.max(floor, Math.min(cap, c + delta)));
     } else {
-      const cap = availableCharges - moveCharges;
+      const cap = Math.min(attackChargeMax, availableCharges - moveCharges);
       setAttackCharges((c) => Math.max(0, Math.min(cap, c + delta)));
+    }
+  }
+
+  // Som ao ativar um item do menu: voltar/recusar = cancel; o resto = confirm.
+  // "Encerrar" (turno) e seu "Sim" tocam confirm (é uma confirmação, não um voltar).
+  function activateItemSfx(it: MenuItem) {
+    const k = it.key;
+    if (k === "__back" || k === "no") {
+      playSfx("cancel");
+    } else {
+      playSfx("confirm");
     }
   }
 
@@ -676,32 +790,58 @@ export function BattleView() {
   const inputRef = useRef<(a: InputAction) => void>(() => {});
   inputRef.current = (a) => {
     if (!controlsActor) return;
-    if (a === "distMinus") return adjustDist(-1);
-    if (a === "distPlus") return adjustDist(1);
+    // L1/R1 ajustam a distorção em qualquer contexto (movimento ou ataque).
+    if (a === "distMinus") { playSfx("distortion"); return adjustDist(-1); }
+    if (a === "distPlus") { playSfx("distortion"); return adjustDist(1); }
     if (nav === "move") {
-      if (a === "up") stepMove(0, -1);
-      else if (a === "down") stepMove(0, 1);
-      else if (a === "left") stepMove(-1, 0);
-      else if (a === "right") stepMove(1, 0);
-      else if (a === "confirm" || a === "cancel") setNav("root");
+      if (a === "up") { if (stepMove(0, -1)) playSfx("move"); }
+      else if (a === "down") { if (stepMove(0, 1)) playSfx("move"); }
+      else if (a === "left") { if (stepMove(-1, 0)) playSfx("move"); }
+      else if (a === "right") { if (stepMove(1, 0)) playSfx("move"); }
+      else if (a === "confirm" || a === "cancel") { playSfx("confirm"); exitMove(); }
       return;
     }
     if (nav === "inspect") {
+      if (a === "confirm" || a === "cancel") {
+        playSfx("cancel");
+        setNav("root");
+        return;
+      }
       const clamp = (v: number) => Math.max(0, Math.min(grid - 1, v));
-      if (a === "up") setCursor((c) => ({ ...c, y: clamp(c.y - 1) }));
-      else if (a === "down") setCursor((c) => ({ ...c, y: clamp(c.y + 1) }));
-      else if (a === "left") setCursor((c) => ({ ...c, x: clamp(c.x - 1) }));
-      else if (a === "right") setCursor((c) => ({ ...c, x: clamp(c.x + 1) }));
-      else if (a === "confirm" || a === "cancel") setNav("root");
+      const nx = clamp(cursor.x + (a === "right" ? 1 : a === "left" ? -1 : 0));
+      const ny = clamp(cursor.y + (a === "down" ? 1 : a === "up" ? -1 : 0));
+      if (nx !== cursor.x || ny !== cursor.y) {
+        setCursor({ x: nx, y: ny });
+        playSfx("move");
+      }
+      return;
+    }
+    // ← → ajustam a distorção de ataque (quando no fluxo de ataque).
+    if (a === "left" || a === "right") {
+      if (inAttackFlow) {
+        playSfx("distortion");
+        adjustDist(a === "right" ? 1 : -1);
+      }
       return;
     }
     const items = menu.items;
-    if (a === "up") setMenuIndex((i) => (i - 1 + items.length) % items.length);
-    else if (a === "down") setMenuIndex((i) => (i + 1) % items.length);
-    else if (a === "confirm") {
+    if (a === "up") {
+      setMenuIndex((i) => (i - 1 + items.length) % items.length);
+      playSfx("navigate");
+    } else if (a === "down") {
+      setMenuIndex((i) => (i + 1) % items.length);
+      playSfx("navigate");
+    } else if (a === "confirm") {
       const it = items[menuIndex];
-      if (it && !it.disabled) it.run();
+      if (!it) return;
+      if (it.disabled) {
+        playSfx("error");
+        return;
+      }
+      activateItemSfx(it);
+      it.run();
     } else if (a === "cancel") {
+      playSfx("cancel");
       menu.back?.();
     }
   };
@@ -725,8 +865,6 @@ export function BattleView() {
         " ": "confirm",
         Escape: "cancel",
         Backspace: "cancel",
-        q: "distMinus",
-        e: "distPlus",
       };
       const action = map[e.key];
       if (action) {
@@ -794,6 +932,36 @@ export function BattleView() {
       cancelAnimationFrame(raf);
     };
   }, []);
+
+  // Sons de movimento do PERSONAGEM tocados também para os espectadores (quem
+  // não controla o ator): o token se move / muda a distorção de movimento na tela
+  // deles via intent compartilhado. O controlador já toca localmente; aqui só os
+  // demais. Sons de interação de menu permanecem locais.
+  const specTurnRef = useRef(-1);
+  const specStagedRef = useRef("none");
+  const specMoveChargesRef = useRef(0);
+  const intentStagedKey = intentForActor?.staged
+    ? `${intentForActor.staged.x},${intentForActor.staged.y}`
+    : "none";
+  const intentMoveCharges = intentForActor?.moveCharges ?? 0;
+  useEffect(() => {
+    const seq = battle?.turnSeq ?? 0;
+    // Em novo turno ou quando ESTE cliente controla o ator: só sincroniza (sem tocar).
+    if (controlsActor || seq !== specTurnRef.current) {
+      specTurnRef.current = seq;
+      specStagedRef.current = intentStagedKey;
+      specMoveChargesRef.current = intentMoveCharges;
+      return;
+    }
+    if (intentStagedKey !== specStagedRef.current) {
+      specStagedRef.current = intentStagedKey;
+      if (intentStagedKey !== "none") playSfx("move");
+    }
+    if (intentMoveCharges !== specMoveChargesRef.current) {
+      specMoveChargesRef.current = intentMoveCharges;
+      playSfx("distortion");
+    }
+  }, [controlsActor, battle?.turnSeq, intentStagedKey, intentMoveCharges]);
 
   // Transmite o planejamento (movimento/arma/alvo) para todos verem em tempo real.
   useEffect(() => {
@@ -913,8 +1081,12 @@ export function BattleView() {
                   isCursor ? styles.cursor : "",
                 ].join(" ")}
                 onClick={() => {
-                  if (nav === "inspect") setCursor({ x, y });
-                  else clickCell(x, y);
+                  if (nav === "inspect") {
+                    if (cursor.x !== x || cursor.y !== y) {
+                      setCursor({ x, y });
+                      playSfx("move");
+                    }
+                  } else clickCell(x, y);
                 }}
               >
                 {tok && (
@@ -924,6 +1096,7 @@ export function BattleView() {
                     tokens={battle.tokens}
                     active={tok.id === currentActor?.id}
                     damage={damagePopups.find((d) => d.tokenId === tok.id)}
+                    flanked={flankedIds.has(tok.id)}
                     onInspect={
                       // Todos podem inspecionar clicando — exceto a própria casa do
                       // ator durante o movimento (lá o clique serve para mover).
@@ -962,7 +1135,55 @@ export function BattleView() {
                   Inspecionar — mova o cursor branco (direcionais/clique). Os dados
                   aparecem no painel inferior esquerdo.
                 </p>
-                <button className={styles.confirm} onClick={() => setNav("root")}>
+                {isGM &&
+                  (inspectShown ? (
+                    <>
+                      {(inspectShown.kind === "player" || inspectShown.kind === "enemy") &&
+                        inspectShown.state !== "Morto" &&
+                        !battle.initiative.some((i) => i.tokenId === inspectShown.id) && (
+                          <button
+                            className={styles.confirm}
+                            onClick={() => {
+                              playSfx("confirm");
+                              emit("gm:grantInitiative", { tokenId: inspectShown.id });
+                            }}
+                          >
+                            ⚄ Conceder iniciativa a “{inspectShown.label}”
+                          </button>
+                        )}
+                      <button
+                        className={styles.confirm}
+                        onClick={() => { playSfx("confirm"); setMenuIndex(0); setNav("confirmRemoveEnemy"); }}
+                      >
+                        ✖ Remover “{inspectShown.label}” do mapa
+                      </button>
+                    </>
+                  ) : (
+                    <div className={styles.charges}>
+                      <div className={styles.chargeHead}>
+                        <span>Adicionar inimigo nesta casa</span>
+                      </div>
+                      <select
+                        className={styles.npcSelect}
+                        value={addNpcId || state.npcs[0]?.id || ""}
+                        onChange={(e) => setAddNpcId(e.target.value)}
+                      >
+                        {state.npcs.map((n) => (
+                          <option key={n.id} value={n.id}>
+                            {n.name} (HP {n.hp})
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className={styles.confirm}
+                        disabled={state.npcs.length === 0}
+                        onClick={() => { playSfx("confirm"); setMenuIndex(0); setNav("confirmAddEnemy"); }}
+                      >
+                        ＋ Adicionar inimigo
+                      </button>
+                    </div>
+                  ))}
+                <button className={styles.confirm} onClick={() => { playSfx("cancel"); setNav("root"); }}>
                   ◀ Voltar ao menu
                 </button>
               </>
@@ -983,11 +1204,12 @@ export function BattleView() {
                     <button
                       type="button"
                       disabled={moveCharges <= minMoveCharges()}
-                      onClick={() =>
-                        setMoveCharges((c) => Math.max(minMoveCharges(), c - 1))
-                      }
+                      onClick={() => {
+                        playSfx("distortion");
+                        setMoveCharges((c) => Math.max(minMoveCharges(), c - 1));
+                      }}
                     >
-                      −
+                      L1
                     </button>
                     <span>
                       +{moveCharges} casa{moveCharges === 1 ? "" : "s"}
@@ -995,14 +1217,14 @@ export function BattleView() {
                     <button
                       type="button"
                       disabled={moveCharges + attackCharges >= availableCharges}
-                      onClick={() => setMoveCharges((c) => c + 1)}
+                      onClick={() => { playSfx("distortion"); setMoveCharges((c) => c + 1); }}
                     >
-                      +
+                      R1
                     </button>
                   </div>
                 </div>
-                <button className={styles.confirm} onClick={() => setNav("root")}>
-                  ◀ Voltar ao menu
+                <button className={styles.confirm} onClick={() => { playSfx("confirm"); exitMove(); }}>
+                  {acted && hasMoved ? "✓ Confirmar movimento e encerrar" : "◀ Voltar ao menu"}
                 </button>
               </>
             ) : (
@@ -1015,16 +1237,60 @@ export function BattleView() {
                     {adjMod} no ataque
                   </p>
                 )}
+                {/* Distorção primeiro — ajustada por L1/R1 (e ← → no teclado). */}
+                {inAttackFlow && (
+                  <div className={styles.charges}>
+                    <div className={styles.chargeHead}>
+                      <span>Distorção: ataque (L1/R1)</span>
+                      <span className={styles.chargeCount}>
+                        {availableCharges - moveCharges - attackCharges}/{availableCharges} livres
+                      </span>
+                    </div>
+                    <div className={styles.stepper}>
+                      <button
+                        type="button"
+                        disabled={attackCharges <= 0}
+                        onClick={() => { playSfx("distortion"); setAttackCharges((c) => Math.max(0, c - 1)); }}
+                      >
+                        L1
+                      </button>
+                      <span className={styles.dmgPlus}>
+                        +{attackCharges * DISTORTION_DMG_PER_CHARGE} dano
+                      </span>
+                      <button
+                        type="button"
+                        disabled={
+                          attackCharges >= attackChargeMax ||
+                          moveCharges + attackCharges >= availableCharges
+                        }
+                        onClick={() => {
+                          playSfx("distortion");
+                          setAttackCharges((c) => Math.min(attackChargeMax, c + 1));
+                        }}
+                      >
+                        R1
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {menu.items.map((it, i) => (
                   <button
                     key={it.key}
                     type="button"
                     disabled={it.disabled}
                     className={`${styles.cmdItem} ${i === menuIndex ? styles.cmdOn : ""}`}
-                    onMouseEnter={() => setMenuIndex(i)}
+                    onMouseEnter={() => {
+                      if (i !== menuIndex) {
+                        setMenuIndex(i);
+                        playSfx("navigate");
+                      }
+                    }}
                     onClick={() => {
                       setMenuIndex(i);
-                      if (!it.disabled) it.run();
+                      if (!it.disabled) {
+                        activateItemSfx(it);
+                        it.run();
+                      }
                     }}
                   >
                     <span className={styles.cmdRow}>
@@ -1037,36 +1303,10 @@ export function BattleView() {
                     {it.meta && <span className={styles.cmdMeta}>{it.meta}</span>}
                   </button>
                 ))}
-                {nav === "target" && (
-                  <div className={styles.charges}>
-                    <div className={styles.chargeHead}>
-                      <span>Distorção: ataque (L1/R1)</span>
-                      <span className={styles.chargeCount}>
-                        {availableCharges - moveCharges - attackCharges}/{availableCharges} livres
-                      </span>
-                    </div>
-                    <div className={styles.stepper}>
-                      <button
-                        type="button"
-                        disabled={attackCharges <= 0}
-                        onClick={() => setAttackCharges((c) => Math.max(0, c - 1))}
-                      >
-                        −
-                      </button>
-                      <span className={styles.dmgPlus}>
-                        +{attackCharges * DISTORTION_DMG_PER_CHARGE} dano
-                      </span>
-                      <button
-                        type="button"
-                        disabled={moveCharges + attackCharges >= availableCharges}
-                        onClick={() => setAttackCharges((c) => c + 1)}
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
-                )}
-                <p className={styles.cmdHint}>direcionais · A/Enter confirma · B/Esc volta</p>
+                <p className={styles.cmdHint}>
+                  ↕ navega · A/Enter confirma · B/Esc volta
+                  {inAttackFlow ? " · L1/R1 distorção" : ""}
+                </p>
               </div>
             )}
           </div>
@@ -1145,7 +1385,7 @@ export function BattleView() {
           )
         ) : (
           <div className={styles.logBody}>
-            {battle.log.map((l, i) => (
+            {battle.log.slice(-20).map((l, i) => (
               <div key={i} className={styles.logLine}>
                 &gt; {l}
               </div>
@@ -1180,6 +1420,7 @@ function Cube({
   tokens,
   active,
   damage,
+  flanked,
   onInspect,
 }: {
   token: Token;
@@ -1187,6 +1428,7 @@ function Cube({
   tokens: Token[];
   active?: boolean;
   damage?: DamagePopup;
+  flanked?: boolean;
   onInspect?: () => void;
 }) {
   const rule = ruleOf(token);
@@ -1227,13 +1469,22 @@ function Cube({
 
       {/* rótulos (billboard) acima do cubo — sempre visíveis */}
       <span className={styles.cubeLabel}>
-        {damage && <span className={styles.cubeDmg}>-{damage.amount}</span>}
+        {damage && (
+          <span className={styles.cubeDmg}>
+            -{damage.amount}
+            {damage.notes?.map((n, i) => (
+              <span key={i} className={styles.dmgNote}>
+                {n}
+              </span>
+            ))}
+          </span>
+        )}
         <span className={styles.cubeName}>{token.label}</span>
         {hasHp && !isDead && (
           <span className={styles.cubeHp}>
             {token.hp}/{token.maxHp}
             {isUnit && dt > 0 ? (
-              <span className={styles.cubeDt}> ◆{dt}</span>
+              <span className={styles.cubeDt}> ◆ {dt}</span>
             ) : null}
           </span>
         )}
@@ -1242,6 +1493,9 @@ function Cube({
         )}
         {token.kind === "object" && rule && (
           <span className={styles.cubeBadgeLabel}>{objectBadge(token)}</span>
+        )}
+        {flanked && !isDead && (
+          <span className={styles.cubeFlanked}>FLANQUEADO</span>
         )}
         {adjBadges.length > 0 && (
           <span className={styles.cubeMods}>
@@ -1284,7 +1538,7 @@ function TokenInspector({
   // Armas (com munição em campo) e consumíveis com quantidade.
   const weaponIds = ch ? ch.items.map((s) => s.id) : npc?.weapons ?? [];
   const weapons = weaponIds
-    .map(item)
+    .map((id) => resolveItem(state.items, id)) // resolve Mãos Livres embutido
     .filter((w): w is NonNullable<typeof w> => !!w && w.category === "weapon");
   const consumables = ch
     ? ch.items

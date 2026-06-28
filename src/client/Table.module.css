@@ -13,6 +13,7 @@
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
+  min-height: 48px;
   border-bottom: 1px solid var(--green-dim);
   flex-wrap: wrap;
   position: sticky;

@@ -33,8 +33,8 @@ export const PROFESSIONS: Profession[] = [
 ];
 
 export const ITEMS: CatalogItem[] = [
-  // Armas (range = alcance em casas)
-  { id: "wpn_maos_livres", category: "weapon", name: "Mãos Livres", damage: "1d4", range: 1, description: "Combate desarmado." },
+  // Armas (range = alcance em casas). Mãos Livres é embutida (game/weapons.ts),
+  // não fica no catálogo editável.
   { id: "wpn_taco", category: "weapon", name: "Taco / Bastão", damage: "1d6", range: 1 },
   { id: "wpn_faca", category: "weapon", name: "Faca / Canivete", damage: "1d6", range: 1 },
   { id: "wpn_katana", category: "weapon", name: "Katana", damage: "2d6", range: 1 },

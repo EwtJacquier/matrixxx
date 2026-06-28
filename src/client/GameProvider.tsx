@@ -10,6 +10,7 @@ import {
 } from "react";
 import { io, type Socket } from "socket.io-client";
 import type { DamageEvent, PublicState, Roll } from "@/game/types";
+import { playSfx } from "./sfx";
 
 interface Session {
   id: string;
@@ -40,6 +41,8 @@ interface GameContextValue {
   damagePopups: DamagePopup[];
   battleIntent: BattleIntent | null;
   turnEndsAt: number;
+  /** áudio (data URL) da faixa pedida via music:track, entregue sob demanda. */
+  trackData: { id: string; src: string } | null;
   error: string | null;
   authExpired: boolean;
   emit: (event: string, payload?: unknown) => void;
@@ -61,6 +64,7 @@ export function GameProvider({
   const [damagePopups, setDamagePopups] = useState<DamagePopup[]>([]);
   const [battleIntent, setBattleIntent] = useState<BattleIntent | null>(null);
   const [turnEndsAt, setTurnEndsAt] = useState(0);
+  const [trackData, setTrackData] = useState<{ id: string; src: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
 
@@ -88,15 +92,18 @@ export function GameProvider({
     socket.on("battle:timer", ({ turnEndsAt: t }: { turnEndsAt: number }) =>
       setTurnEndsAt(t),
     );
+    socket.on("music:data", (d: { id: string; src: string }) => setTrackData(d));
     socket.on("battle:damage", ({ events }: { events: DamageEvent[] }) => {
+      // Som de laser sempre que o dano aparece (um por alvo atingido).
+      events.forEach(() => playSfx("laser"));
       const base = Date.now();
       const popups = events.map((e, i) => ({ ...e, key: base + i }));
       setDamagePopups((cur) => [...cur, ...popups]);
-      // remove os popups após a animação
+      // remove os popups após a animação (deve casar com dmgRise no CSS)
       const keys = new Set(popups.map((p) => p.key));
       setTimeout(() => {
         setDamagePopups((cur) => cur.filter((p) => !keys.has(p.key)));
-      }, 1400);
+      }, 2400);
     });
     socket.on("game:error", ({ message }: { message: string }) => {
       setError(message);
@@ -125,7 +132,7 @@ export function GameProvider({
 
   return (
     <GameContext.Provider
-      value={{ connected, session, state, lastRoll, damagePopups, battleIntent, turnEndsAt, error, authExpired, emit }}
+      value={{ connected, session, state, lastRoll, damagePopups, battleIntent, turnEndsAt, trackData, error, authExpired, emit }}
     >
       {children}
     </GameContext.Provider>
