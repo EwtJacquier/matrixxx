@@ -2,19 +2,26 @@
 
 import { useEffect, useState } from "react";
 
+/** Avalia se é mobile AGORA (ponteiro grosso + tela pequena). SSR-safe. */
+function computeMobile(): boolean {
+  if (typeof window === "undefined") return false;
+  const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+  const small = Math.min(window.innerWidth, window.innerHeight) <= 820;
+  return coarse && small;
+}
+
 /**
- * Detecta um dispositivo móvel: ponteiro grosso (touch) + tela pequena (a menor
- * dimensão da janela). Reavalia em resize/rotação. Também marca `html.mobile`
- * para overrides de CSS global.
+ * Detecta um dispositivo móvel. O valor já vem correto no PRIMEIRO render do
+ * cliente (inicializador síncrono) — isso evita uma janela em que `false` dispara
+ * efeitos indesejados (ex.: a música começar a tocar antes do flag virar true).
+ * Reavalia em resize/rotação e marca `html.mobile` para overrides de CSS.
  */
 export function useMobile(): boolean {
-  const [mobile, setMobile] = useState(false);
+  const [mobile, setMobile] = useState<boolean>(computeMobile);
 
   useEffect(() => {
     const check = () => {
-      const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
-      const small = Math.min(window.innerWidth, window.innerHeight) <= 820;
-      const isMobile = coarse && small;
+      const isMobile = computeMobile();
       setMobile(isMobile);
       document.documentElement.classList.toggle("mobile", isMobile);
     };

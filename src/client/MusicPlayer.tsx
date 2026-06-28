@@ -56,6 +56,29 @@ export function MusicPlayer() {
     }
   }, [mobile, nowPlaying?.trackId, trackData?.id, emit]);
 
+  // Desabilita picture-in-picture e o player do SO (media session) para o áudio.
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.setAttribute("disablePictureInPicture", "");
+    a.setAttribute("disableRemotePlayback", "");
+    try {
+      const ms = (navigator as Navigator & { mediaSession?: MediaSession }).mediaSession;
+      if (ms) {
+        ms.metadata = null;
+        for (const act of ["play", "pause", "previoustrack", "nexttrack", "seekto"] as const) {
+          try {
+            ms.setActionHandler(act, null);
+          } catch {
+            /* ação não suportada */
+          }
+        }
+      }
+    } catch {
+      /* sem media session */
+    }
+  }, []);
+
   // Define a fonte do <audio> quando o áudio chega (ou para, sem música).
   useEffect(() => {
     const a = audioRef.current;
@@ -101,6 +124,7 @@ export function MusicPlayer() {
   // Sincroniza posição e dá play (na carga e quando a faixa/startedAt muda).
   useEffect(() => {
     const a = audioRef.current;
+    if (mobile) return; // mobile nunca toca música (só SFX)
     if (!a || !nowPlaying) return;
     if (!trackData || trackData.id !== nowPlaying.trackId) return;
     const sync = () => {
@@ -124,7 +148,7 @@ export function MusicPlayer() {
       a.addEventListener("loadedmetadata", sync, { once: true });
       return () => a.removeEventListener("loadedmetadata", sync);
     }
-  }, [nowPlaying, trackData, duration]);
+  }, [mobile, nowPlaying, trackData, duration]);
 
   // Corrige deriva (aba em segundo plano etc.) a cada 4s + relógio do display.
   useEffect(() => {
@@ -165,7 +189,7 @@ export function MusicPlayer() {
 
   return (
     <div className={styles.player}>
-      {/* elemento de áudio persistente (escondido) */}
+      {/* elemento de áudio persistente (escondido); sem picture-in-picture. */}
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       <audio ref={audioRef} hidden />
 

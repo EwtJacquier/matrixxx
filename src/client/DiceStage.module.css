@@ -1,0 +1,66 @@
+/* Canvas dos dados 3D preenche o scenarioBox; não intercepta cliques. */
+.canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.canvas canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Barra de botões de dados (topo-direita do scenarioBox). */
+.dock {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  display: flex;
+  gap: 6px;
+}
+
+.die {
+  padding: 4px 8px;
+  font-size: 12px;
+  background: #000;
+  border: 1px solid var(--green);
+  color: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+
+.die:hover:not(:disabled) {
+  background: var(--green-faint);
+}
+
+/* Resultado da última rolagem (topo-esquerda), sempre visível. */
+.result {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 6;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px;
+  background: #000;
+  border: 1px solid var(--green);
+}
+
+.resultRolling {
+  border-color: var(--green);
+  box-shadow: 0 0 10px var(--green-glow);
+}
+
+.resultTotal {
+  font-size: 22px;
+  font-weight: bold;
+  color: var(--green);
+  text-shadow: 0 0 8px var(--green-glow);
+}
+
+.resultMeta {
+  font-size: 13px;
+  color: var(--green);
+}

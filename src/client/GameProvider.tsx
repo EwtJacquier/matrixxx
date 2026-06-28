@@ -41,8 +41,15 @@ interface GameContextValue {
   damagePopups: DamagePopup[];
   battleIntent: BattleIntent | null;
   turnEndsAt: number;
+  /** offset (ms) entre o relógio do servidor e o do cliente: serverNow ≈ Date.now() + clockOffset.
+   * Torna o timer imune à diferença de relógio entre o aparelho e o servidor. */
+  clockOffset: number;
   /** áudio (data URL) da faixa pedida via music:track, entregue sob demanda. */
   trackData: { id: string; src: string } | null;
+  /** imagens (data URL) buscadas sob demanda, em cache por `kind:id:ver`. */
+  assets: Record<string, string>;
+  /** pede a imagem de uma entidade (de-dup automático); retorna a key do cache. */
+  requestAsset: (kind: "scenarios" | "characters" | "npcs", id: string, ver?: number) => string;
   error: string | null;
   authExpired: boolean;
   emit: (event: string, payload?: unknown) => void;
@@ -64,6 +71,11 @@ export function GameProvider({
   const [damagePopups, setDamagePopups] = useState<DamagePopup[]>([]);
   const [battleIntent, setBattleIntent] = useState<BattleIntent | null>(null);
   const [turnEndsAt, setTurnEndsAt] = useState(0);
+  const [clockOffset, setClockOffset] = useState(0);
+  const [assets, setAssets] = useState<Record<string, string>>({});
+  const assetsRef = useRef<Record<string, string>>({});
+  assetsRef.current = assets;
+  const assetPending = useRef<Set<string>>(new Set());
   const [trackData, setTrackData] = useState<{ id: string; src: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
@@ -80,8 +92,20 @@ export function GameProvider({
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const MAX_AUTH_RETRIES = 4;
 
-    socket.on("connect", () => setConnected(true));
+    // Sincroniza o relógio com o servidor (corrige skew client↔server no timer).
+    const syncClock = () => socket.emit("time:sync", { t0: Date.now() });
+    let clockTimer: ReturnType<typeof setInterval> | null = null;
+
+    socket.on("connect", () => {
+      setConnected(true);
+      syncClock();
+    });
     socket.on("disconnect", () => setConnected(false));
+    socket.on("time:pong", ({ serverNow, t0 }: { serverNow: number; t0: number }) => {
+      const rtt = Date.now() - t0;
+      // serverNow vale ~no meio do round-trip; corrige pela metade do RTT.
+      setClockOffset(serverNow + rtt / 2 - Date.now());
+    });
     socket.on("session", () => {
       authAttempts = 0;
       setAuthExpired(false);
@@ -93,6 +117,10 @@ export function GameProvider({
       setTurnEndsAt(t),
     );
     socket.on("music:data", (d: { id: string; src: string }) => setTrackData(d));
+    socket.on("asset:data", ({ key, data }: { key: string; data: string }) => {
+      assetPending.current.delete(key);
+      setAssets((cur) => (cur[key] === data ? cur : { ...cur, [key]: data }));
+    });
     socket.on("battle:damage", ({ events }: { events: DamageEvent[] }) => {
       // Som de laser sempre que o dano aparece (um por alvo atingido).
       events.forEach(() => playSfx("laser"));
@@ -119,8 +147,11 @@ export function GameProvider({
       }
     });
 
+    clockTimer = setInterval(syncClock, 20000);
+
     return () => {
       if (retryTimer) clearTimeout(retryTimer);
+      if (clockTimer) clearInterval(clockTimer);
       socket.disconnect();
       socketRef.current = null;
     };
@@ -130,9 +161,21 @@ export function GameProvider({
     socketRef.current?.emit(event, payload);
   }, []);
 
+  const requestAsset = useCallback(
+    (kind: "scenarios" | "characters" | "npcs", id: string, ver = 0) => {
+      const key = `${kind}:${id}:${ver}`;
+      if (!assetsRef.current[key] && !assetPending.current.has(key)) {
+        assetPending.current.add(key);
+        socketRef.current?.emit("asset:get", { kind, id });
+      }
+      return key;
+    },
+    [],
+  );
+
   return (
     <GameContext.Provider
-      value={{ connected, session, state, lastRoll, damagePopups, battleIntent, turnEndsAt, trackData, error, authExpired, emit }}
+      value={{ connected, session, state, lastRoll, damagePopups, battleIntent, turnEndsAt, clockOffset, trackData, assets, requestAsset, error, authExpired, emit }}
     >
       {children}
     </GameContext.Provider>

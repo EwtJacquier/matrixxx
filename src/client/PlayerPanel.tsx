@@ -3,6 +3,9 @@
 import { useGame } from "./GameProvider";
 import type { Character } from "@/game/types";
 import { STATES } from "@/game/types";
+import { combatBonusLabel } from "@/game/professions";
+import { FREE_HANDS } from "@/game/weapons";
+import { AssetImage } from "./AssetImage";
 import styles from "./PlayerPanel.module.css";
 
 export function PlayerPanel({
@@ -17,6 +20,13 @@ export function PlayerPanel({
 
   const nameOf = <T extends { id: string; name: string }>(arr: T[], id: string) =>
     arr.find((x) => x.id === id)?.name ?? id;
+
+  // Profissões do personagem, separadas por tipo.
+  const myProfs = character.roles
+    .map((id) => state.professions.find((p) => p.id === id))
+    .filter((p): p is NonNullable<typeof p> => !!p);
+  const combatProfs = myProfs.filter((p) => p.kind === "combat");
+  const rpProfs = myProfs.filter((p) => p.kind === "rp");
 
   const stateIdx = STATES.indexOf(character.state);
   const hpPct = Math.round((character.hp / Math.max(1, character.maxHp)) * 100);
@@ -37,12 +47,13 @@ export function PlayerPanel({
     <div className={styles.card}>
       <div className={styles.top}>
         <div className={styles.avatar}>
-          {character.picture ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={character.picture} alt={character.name} />
-          ) : (
-            <span>?</span>
-          )}
+          <AssetImage
+            kind="characters"
+            id={character.id}
+            ver={character.pictureVer}
+            alt={character.name}
+            fallback={<span>?</span>}
+          />
         </div>
         <div className={styles.ident}>
           <strong className={styles.name}>{character.name || "sem nome"}</strong>
@@ -88,30 +99,42 @@ export function PlayerPanel({
 
       <div className={styles.lists}>
         <div className={styles.section}>
-          <span className={styles.label}>Profissões</span>
-          <div className={styles.chips}>
-            {character.roles.map((r) => (
-              <span key={r} className={styles.chip}>
-                {nameOf(state.professions, r)}
-              </span>
+          <span className={styles.label}>Combate</span>
+          <div className={styles.profList}>
+            {combatProfs.map((p) => (
+              <div key={p.id} className={`${styles.profRow} ${styles.profCombat}`}>
+                <span className={styles.profName}>
+                  {p.name}
+                  {p.hack_found && <span className={styles.hackDot} title="hack disponível">⌁</span>}
+                </span>
+                {combatBonusLabel(p) && (
+                  <span className={styles.profBonus}>{combatBonusLabel(p)}</span>
+                )}
+              </div>
             ))}
-            {character.roles.length === 0 && <span className="muted">—</span>}
+            {combatProfs.length === 0 && <span className="muted">—</span>}
           </div>
         </div>
         <div className={styles.section}>
-          <span className={styles.label}>Hacks</span>
-          <div className={styles.chips}>
-            {character.hacks.map((h) => (
-              <span key={h} className={styles.chip}>
-                {nameOf(state.hacks, h)}
-              </span>
+          <span className={styles.label}>RP</span>
+          <div className={styles.profList}>
+            {rpProfs.map((p) => (
+              <div key={p.id} className={`${styles.profRow} ${styles.profRp}`}>
+                <span className={styles.profName}>
+                  {p.name}
+                  {p.hack_found && <span className={styles.hackDot} title="hack disponível">⌁</span>}
+                </span>
+                <span className={styles.profDesc}>{p.description}</span>
+              </div>
             ))}
-            {character.hacks.length === 0 && <span className="muted">—</span>}
+            {rpProfs.length === 0 && <span className="muted">—</span>}
           </div>
         </div>
         <div className={styles.section}>
           <span className={styles.label}>Itens</span>
           <div className={styles.chips}>
+            {/* Mãos Livres é embutida e sempre presente. */}
+            <span className={styles.chip}>{FREE_HANDS.name}</span>
             {character.items.map((it, i) => {
               const usable = canUse && !!itemCatalog(it.id)?.heal;
               return (
@@ -131,7 +154,6 @@ export function PlayerPanel({
                 </span>
               );
             })}
-            {character.items.length === 0 && <span className="muted">—</span>}
           </div>
         </div>
       </div>

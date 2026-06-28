@@ -29,17 +29,24 @@ import {
 } from "../data/store";
 
 export function buildPublicState(): PublicState {
+  const g = getGame();
+  // Imagens base64 são pesadas e raramente mudam → saem do estado transmitido e
+  // são buscadas sob demanda (asset:get). Mantém só a versão para invalidar cache.
+  // O histórico da batalha não é usado no cliente → não viaja (segue no servidor).
   return {
-    game: getGame(),
-    scenarios: getScenarios(),
+    game: {
+      ...g,
+      battle: g.battle ? { ...g.battle, history: [] } : null,
+    },
+    scenarios: getScenarios().map((s) => ({ ...s, image: "" })),
     professions: getProfessions(),
     items: getItems(),
     hacks: getHacks(),
     disguises: getDisguises(),
-    npcs: getNpcs(),
+    npcs: getNpcs().map((n) => ({ ...n, picture: n.picture ? "" : undefined })),
     objects: getObjects(),
     battleTemplates: getBattleTemplates(),
-    characters: getCharacters(),
+    characters: getCharacters().map((c) => ({ ...c, picture: "" })),
     // Só metadados: o áudio (data URL) é pesado e é buscado sob demanda.
     music: getMusic().map((t) => ({ id: t.id, name: t.name, duration: t.duration })),
     players: getUsers().map((u) => ({ id: u.id, email: u.email, role: u.role })),

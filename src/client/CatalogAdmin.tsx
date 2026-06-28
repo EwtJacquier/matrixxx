@@ -17,13 +17,14 @@ import type {
 } from "@/game/types";
 import { cropToSquareDataUrl, fileToDataUrl } from "./image";
 import { audioDuration, fmtTime } from "./audio";
-import { FREE_HANDS_ID } from "@/game/weapons";
+import { FREE_HANDS_ID, weaponTypeOf } from "@/game/weapons";
+import { combatBonusLabel } from "@/game/professions";
+import { AssetImage } from "./AssetImage";
 import styles from "./CatalogAdmin.module.css";
 
 type Kind =
   | "scenarios"
   | "items"
-  | "hacks"
   | "disguises"
   | "professions"
   | "npcs"
@@ -38,7 +39,6 @@ const TABS: { kind: Kind; label: string }[] = [
   { kind: "battleTemplates", label: "Modelos de Batalha" },
   { kind: "items", label: "Itens/Armas" },
   { kind: "professions", label: "Profissões" },
-  { kind: "hacks", label: "Hacks" },
   { kind: "disguises", label: "Disfarces" },
   { kind: "music", label: "Músicas" },
 ];
@@ -129,14 +129,6 @@ export function CatalogAdmin() {
       )}
       {tab === "professions" && (
         <ProfessionForm items={state.professions} onSave={upsert} onRemove={remove} />
-      )}
-      {tab === "hacks" && (
-        <NamedForm
-          items={state.hacks}
-          prefix="hack"
-          onSave={upsert}
-          onRemove={remove}
-        />
       )}
       {tab === "disguises" && (
         <NamedForm
@@ -232,10 +224,13 @@ function ScenarioForm({
           Imagem
           <input type="file" accept="image/*" onChange={pickImage} />
         </label>
-        {draft.image && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={draft.image} alt="" className={styles.preview} />
-        )}
+        <AssetImage
+          kind="scenarios"
+          id={draft.id}
+          ver={draft.imageVer}
+          inline={draft.image || undefined}
+          className={styles.preview}
+        />
         <div className={styles.formBtns}>
           <button
             onClick={() => {
@@ -303,6 +298,18 @@ function ItemForm({
         </label>
         {draft.category === "weapon" && (
           <>
+            <label>
+              Tipo de arma
+              <select
+                value={draft.weaponType ?? "melee"}
+                onChange={(e) =>
+                  setDraft({ ...draft, weaponType: e.target.value as "melee" | "firearm" })
+                }
+              >
+                <option value="melee">Corpo a corpo</option>
+                <option value="firearm">Arma de fogo</option>
+              </select>
+            </label>
             <div className={styles.row2}>
               <label>
                 Dado (ex.: 1d6)
@@ -445,7 +452,7 @@ function ItemForm({
                 title={it.name}
                 subtitle={
                   it.category === "weapon"
-                    ? `${it.damage ?? "—"} · alc ${
+                    ? `${weaponTypeOf(it) === "firearm" ? "🔫" : "🗡"} ${it.damage ?? "—"} · alc ${
                         it.minRange && it.minRange > 1
                           ? `${it.minRange}-${it.range ?? 1}`
                           : it.range ?? 1
@@ -579,10 +586,13 @@ function NpcForm({
           Imagem (opcional)
           <input type="file" accept="image/*" onChange={pickImage} />
         </label>
-        {draft.picture && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={draft.picture} alt="" className={styles.preview} />
-        )}
+        <AssetImage
+          kind="npcs"
+          id={draft.id}
+          ver={draft.pictureVer}
+          inline={draft.picture || undefined}
+          className={styles.preview}
+        />
         <div className={styles.formBtns}>
           <button
             onClick={() => {
@@ -847,10 +857,12 @@ function ProfessionForm({
   const blank: Profession = {
     id: uid("prof"),
     name: "",
+    kind: "rp",
     hack_found: false,
     description: "",
   };
   const [draft, setDraft] = useState<Profession>(blank);
+  const isCombat = draft.kind === "combat";
 
   return (
     <div className={styles.split}>
@@ -862,6 +874,67 @@ function ProfessionForm({
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
           />
         </label>
+        <label>
+          Tipo
+          <select
+            value={draft.kind}
+            onChange={(e) =>
+              setDraft({ ...draft, kind: e.target.value as Profession["kind"] })
+            }
+          >
+            <option value="combat">Combate (bônus em batalha)</option>
+            <option value="rp">RP (narrativa)</option>
+          </select>
+        </label>
+        {isCombat && (
+          <div className={styles.row2}>
+            <label>
+              +Dano
+              <input
+                type="number"
+                value={draft.dmgBonus ?? 0}
+                onChange={(e) => setDraft({ ...draft, dmgBonus: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              Dano em
+              <select
+                value={draft.dmgType ?? "melee"}
+                disabled={!draft.dmgBonus}
+                onChange={(e) =>
+                  setDraft({ ...draft, dmgType: e.target.value as "melee" | "firearm" })
+                }
+              >
+                <option value="melee">Corpo a corpo</option>
+                <option value="firearm">Arma de fogo</option>
+              </select>
+            </label>
+            <label>
+              +MV
+              <input
+                type="number"
+                value={draft.mvBonus ?? 0}
+                onChange={(e) => setDraft({ ...draft, mvBonus: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              +DF
+              <input
+                type="number"
+                value={draft.dfBonus ?? 0}
+                onChange={(e) => setDraft({ ...draft, dfBonus: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              +HP
+              <input
+                type="number"
+                value={draft.hpBonus ?? 0}
+                onChange={(e) => setDraft({ ...draft, hpBonus: Number(e.target.value) })}
+              />
+            </label>
+          </div>
+        )}
         <label className={styles.check}>
           <input
             type="checkbox"
@@ -892,13 +965,31 @@ function ProfessionForm({
       </div>
       <List>
         {items.map((p) => (
-          <Row
-            key={p.id}
-            title={p.name}
-            subtitle={p.hack_found ? "hack ✓" : undefined}
-            onEdit={() => setDraft(p)}
-            onRemove={() => onRemove(p.id)}
-          />
+          <div key={p.id} className={styles.row}>
+            <div className={styles.rowText}>
+              <strong>
+                {p.name}{" "}
+                <span className={p.kind === "combat" ? styles.tagCombat : styles.tagRp}>
+                  {p.kind === "combat" ? "COMBATE" : "RP"}
+                </span>{" "}
+                <span className={p.hack_found ? styles.tagHack : styles.tagNoHack}>
+                  {p.hack_found ? "HACK ✓" : "SEM HACK"}
+                </span>
+              </strong>
+              <span>
+                {p.kind === "combat" && combatBonusLabel(p)
+                  ? `${combatBonusLabel(p)} — `
+                  : ""}
+                {p.description}
+              </span>
+            </div>
+            <div className={styles.rowActions}>
+              <button onClick={() => setDraft(p)}>editar</button>
+              <button className="danger" onClick={() => onRemove(p.id)}>
+                x
+              </button>
+            </div>
+          </div>
         ))}
       </List>
     </div>

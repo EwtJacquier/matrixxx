@@ -149,6 +149,41 @@
   white-space: nowrap;
 }
 
+/* Tags na lista de profissões (tipo + hack disponível), bem evidentes. */
+.rowText .tagCombat,
+.rowText .tagRp,
+.rowText .tagHack,
+.rowText .tagNoHack {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  padding: 0 4px;
+  border: 1px solid;
+  overflow: visible;
+}
+
+.rowText .tagCombat {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.rowText .tagRp {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+.rowText .tagHack {
+  color: #000;
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.rowText .tagNoHack {
+  color: var(--green-faint);
+  border-color: var(--green-faint);
+}
+
 .ruleDesc {
   margin: 0;
   font-size: 12px;

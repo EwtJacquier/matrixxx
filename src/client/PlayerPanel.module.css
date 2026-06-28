@@ -4,6 +4,24 @@
   padding: 10px;
 }
 
+/* Mobile: o card preenche a coluna lateral e ROLA por dentro. */
+:global(html.mobile) .card {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+/* Mobile: o label fica numa linha só (conteúdo abaixo, sem espremer). */
+:global(html.mobile) .section {
+  grid-template-columns: 1fr;
+  gap: 2px;
+}
+
+:global(html.mobile) .label {
+  padding-top: 0;
+}
+
 .top {
   display: flex;
   gap: 10px;
@@ -84,6 +102,12 @@
   margin: 8px 0;
 }
 
+@media (max-width: 998px) {
+  .stats {
+    flex-wrap: wrap;
+  }
+}
+
 .stat {
   display: flex;
   align-items: center;
@@ -151,6 +175,54 @@
   padding: 0 5px;
   font-size: 9px;
   border-color: var(--green-dim);
+}
+
+/* Profissões: combate (com bônus) e RP (com descrição evidente). */
+.profList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.profRow {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-left: 3px solid var(--green-faint);
+  padding: 2px 6px;
+  background: var(--bg);
+}
+
+.profCombat {
+  border-left-color: var(--red);
+}
+
+.profRp {
+  border-left-color: var(--amber);
+}
+
+.profName {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: bold;
+}
+
+.profBonus {
+  font-size: 11px;
+  color: var(--red);
+}
+
+.profDesc {
+  font-size: 11px;
+  color: var(--green-dim);
+}
+
+.hackDot {
+  color: var(--amber);
+  font-size: 13px;
+  line-height: 1;
+  text-shadow: 0 0 6px rgba(255, 204, 0, 0.6);
 }
 
 @media (max-width: 420px) {

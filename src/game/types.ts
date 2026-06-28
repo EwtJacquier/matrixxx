@@ -26,19 +26,40 @@ export const HP_BY_LEVEL = [10, 20, 30, 40] as const;
 /** Slots de roles/hacks por nível (lvl 0 a 3). */
 export const SLOTS_BY_LEVEL = [0, 2, 3, 4] as const;
 
+export type ProfessionKind = "combat" | "rp";
+
 export interface Profession {
   id: string;
   name: string;
+  /** combate (dá vantagens em batalha) ou RP (narrativa; só marcado no card). */
+  kind: ProfessionKind;
+  /** profissão com hack disponível na matrix (flag evidente na lista). */
   hack_found: boolean;
   description: string;
+  // --- Bônus de combate (só kind === "combat") ---
+  /** +movimento. */
+  mvBonus?: number;
+  /** +defesa (ignora X de dano). */
+  dfBonus?: number;
+  /** +dano fixo, aplicado só ao tipo de arma `dmgType`. */
+  dmgBonus?: number;
+  /** tipo de arma que recebe o +dano (default corpo a corpo). */
+  dmgType?: WeaponType;
+  /** +HP máximo. */
+  hpBonus?: number;
 }
 
 export type ItemCategory = "weapon" | "accessory" | "item";
+
+/** Tipo de arma: corpo a corpo ou arma de fogo. Mãos livres = corpo a corpo. */
+export type WeaponType = "melee" | "firearm";
 
 export interface CatalogItem {
   id: string;
   category: ItemCategory;
   name: string;
+  /** Tipo da arma (category weapon). Ausente = inferido pelo alcance. */
+  weaponType?: WeaponType;
   /** Fórmula de dado+fixo, ex.: "2d6+2" (armas/items usáveis). */
   damage?: string;
   /** Alcance MÁXIMO em casas (distância de Manhattan). Arma corpo a corpo = 1. */
@@ -93,7 +114,8 @@ export interface Npc {
   /** false = NPC neutro (branco); true/ausente = inimigo (vermelho). */
   hostile?: boolean;
   description?: string;
-  picture?: string; // data URL (com crop)
+  picture?: string; // data URL (com crop). Vem vazio no PublicState; buscado sob demanda.
+  pictureVer?: number; // versão da imagem (invalida o cache do cliente ao trocar).
 }
 
 /** Objeto de cenário cadastrável pelo GM. A regra é fixa (ver game/objects.ts). */
@@ -121,7 +143,8 @@ export interface GameObject {
 export interface Scenario {
   id: string;
   name: string;
-  image: string; // data URL ou caminho
+  image: string; // data URL ou caminho. Vem vazio no PublicState; buscado sob demanda.
+  imageVer?: number; // versão da imagem (invalida o cache do cliente ao trocar).
   distortion: number; // 0..10
 }
 
@@ -132,12 +155,12 @@ export interface Character {
   level: 0 | 1 | 2 | 3;
   hp: number;
   maxHp: number;
-  mv: number; // base 2 + acessório
-  df: number; // base 0 + acessório
-  picture: string; // data URL (com crop)
+  mv: number; // base 2 + acessório + profissões de combate
+  df: number; // base 0 + acessório + profissões de combate
+  picture: string; // data URL (com crop). Vem vazio no PublicState; buscado sob demanda.
+  pictureVer?: number; // versão da imagem (invalida o cache do cliente ao trocar).
   costume: string;
-  roles: string[]; // ids de Profession
-  hacks: string[]; // ids de Hack
+  roles: string[]; // ids de Profession (combate + RP; máx 2 de cada)
   items: ItemStack[]; // inventário com quantidades (até 10 tipos)
   state: CharState;
 }
@@ -193,6 +216,12 @@ export interface ConfirmedAction {
   useItemId?: string;
   reloadWeaponId?: string;
   rollId?: string;
+  /** se o ator se moveu antes de agir: posição final a confirmar junto da ação. */
+  commitPos?: { x: number; y: number };
+  /** cargas de distorção alocadas ao movimento (para o commit acima). */
+  moveCharges?: number;
+  /** encerra o turno atomicamente após a ação (evita corrida de eventos). */
+  endTurn?: boolean;
 }
 
 /** Modelo de batalha salvo: grid + tokens posicionados, para reimportar. */

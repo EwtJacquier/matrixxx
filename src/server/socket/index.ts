@@ -22,7 +22,8 @@ import type {
 import { adjacencyMods, ruleOf } from "@/game/objects";
 import { canTarget } from "@/game/faction";
 import { FLANK_BONUS, isFlanked } from "@/game/flank";
-import { FREE_HANDS, FREE_HANDS_ID, inBand, resolveItem, weaponBand } from "@/game/weapons";
+import { FREE_HANDS, inBand, resolveItem, weaponBand, weaponTypeOf } from "@/game/weapons";
+import { professionDamageFor } from "@/game/professions";
 import { adjustItem, itemQty } from "@/game/inventory";
 import { canReachCell } from "@/game/path";
 import { roll } from "@/game/dice";
@@ -30,11 +31,13 @@ import { DISTORTION_DMG_PER_CHARGE, applyDamage, clampDistortion, dieDamageAfter
 import { SESSION_COOKIE, verifyToken } from "../auth/session";
 import { getUserById } from "../auth/users";
 import {
+  getAsset,
   getCharacters,
   getGame,
   getItems,
   getMusic,
   getNpcs,
+  getProfessions,
   refreshUsers,
   remove,
   saveGame,
@@ -123,6 +126,12 @@ export function registerSocket(io: IOServer): void {
       if (token.kind === "enemy") return isGM;
       return false;
     };
+
+    // Sincronização de relógio: o cliente compara com o seu para corrigir o skew
+    // do timer (ecoa t0 para o cliente medir o RTT).
+    socket.on("time:sync", ({ t0 }: { t0: number }) => {
+      socket.emit("time:pong", { serverNow: Date.now(), t0 });
+    });
 
     // Estado inicial só para quem conectou.
     socket.emit("session", user);
@@ -367,12 +376,11 @@ export function registerSocket(io: IOServer): void {
       let r: Roll | null = null;
       const damages: { tokenId: string; amount: number; pos: { x: number; y: number }; notes?: string[] }[] = [];
       // Cargas de distorção gastas no ataque (+dano), limitadas ao disponível.
-      // Armas com ataque só aceitam +1 carga; Mãos Livres (desarmado) é liberado.
+      // Corpo a corpo (inclui mãos livres) é liberado; arma de fogo só aceita +1.
       let chargeCap = actor.charges ?? 0;
       if (action.kind === "attack") {
         const w = resolveItem(getItems(), action.detail);
-        const unarmed = !w || w.id === FREE_HANDS_ID;
-        if (!unarmed) chargeCap = Math.min(chargeCap, 1);
+        if (weaponTypeOf(w) === "firearm") chargeCap = Math.min(chargeCap, 1);
       }
       const charges = Math.max(0, Math.min(action.attackCharges ?? 0, chargeCap));
       const distBonus = charges * DISTORTION_DMG_PER_CHARGE;
@@ -599,6 +607,30 @@ export function registerSocket(io: IOServer): void {
       // Objetos consumidos/destruídos somem; mortos só saem da iniciativa.
       await removeTokens([...deadObjects, ...consumed], actor.id);
       await dropFromInitiative(deadUnits, actor.id);
+
+      // Movimento + encerramento do turno ATÔMICOS (no mesmo evento da ação), para
+      // não correr com player:moveToken/player:endTurn. O advanceTurn roda por
+      // último → o turno avança de fato (não "volta" ao ator).
+      if (action.endTurn) {
+        const p = action.commitPos;
+        if (p) {
+          const occupied = b.tokens.some(
+            (t) => t.id !== actor.id && t.pos.x === p.x && t.pos.y === p.y,
+          );
+          const spend = Math.max(0, Math.min(action.moveCharges ?? 0, actor.charges ?? 0));
+          const mv = baseMv(actor) + spend;
+          if (!occupied && canReachCell(actor, p, b.tokens, b.grid, mv)) {
+            actor.pos = p;
+            if (spend > 0) {
+              actor.charges = (actor.charges ?? 0) - spend;
+              g.distortion = clampDistortion(g.distortion + spend);
+            }
+            await updateTokens(b.tokens);
+          }
+        }
+        await appendLog(`${actor.label} encerrou o turno.`);
+        await advanceTurn(1);
+      }
       broadcast();
     });
 
@@ -625,6 +657,46 @@ export function registerSocket(io: IOServer): void {
         } catch (e) {
           fail((e as Error).message);
         }
+      },
+    );
+
+    // Resultado já rolado no cliente (dados 3D do scenarioBox): o valor exibido no
+    // dado É o resultado. O servidor só registra e transmite a todos.
+    socket.on(
+      "dice:result",
+      async ({
+        formula,
+        total,
+        results,
+        reason,
+      }: {
+        formula: string;
+        total: number;
+        results: number[];
+        reason?: string;
+      }) => {
+        const vals = Array.isArray(results) ? results.map((n) => Number(n) || 0) : [];
+        const r: Roll = {
+          id: `roll_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+          formula: String(formula ?? ""),
+          flat: 0,
+          results: vals,
+          total: Number(total) || vals.reduce((a, b) => a + b, 0),
+          author: user.email,
+          reason: reason || "Rolagem",
+          at: Date.now(),
+        };
+        await emitRoll(r);
+      },
+    );
+
+    // --- Imagens sob demanda (fora do estado, para não inflar o broadcast) ---
+    socket.on(
+      "asset:get",
+      ({ kind, id }: { kind: "scenarios" | "characters" | "npcs"; id: string }) => {
+        if (kind !== "scenarios" && kind !== "characters" && kind !== "npcs") return;
+        const a = getAsset(kind, id);
+        if (a) socket.emit("asset:data", { key: `${kind}:${id}:${a.ver}`, data: a.data });
       },
     );
 
@@ -762,10 +834,8 @@ function tokenDf(token: Token): number {
 }
 
 /**
- * Bônus de dano de profissões de combate do atacante.
- * - Pugilista: +2 desarmado (mãos livres).
- * - Soldado: +1 com arma de fogo (alcance ≥ 2).
- * Retorna { bonus, note }.
+ * Bônus de dano das profissões de COMBATE do atacante, conforme o TIPO da arma
+ * (o +dano só conta se casar com corpo a corpo / arma de fogo). Retorna { bonus, note }.
  */
 function professionDamageBonus(
   actor: Token,
@@ -774,15 +844,8 @@ function professionDamageBonus(
   if (!actor.characterId) return { bonus: 0 };
   const ch = getCharacters().find((c) => c.id === actor.characterId);
   if (!ch) return { bonus: 0 };
-  const isUnarmed = !weapon || weapon.id === FREE_HANDS_ID;
-  const isFirearm = !!weapon && (weapon.range ?? 1) >= 2;
-  if (isUnarmed && ch.roles.includes("prof_pugilista")) {
-    return { bonus: 2, note: "Pugilista +2" };
-  }
-  if (isFirearm && ch.roles.includes("prof_soldado")) {
-    return { bonus: 1, note: "Soldado +1" };
-  }
-  return { bonus: 0 };
+  const bonus = professionDamageFor(ch.roles, getProfessions(), weaponTypeOf(weapon));
+  return bonus ? { bonus, note: `profissão +${bonus}` } : { bonus: 0 };
 }
 
 function resolveWeaponFormula(actor: Token, detail?: string): string {

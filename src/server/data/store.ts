@@ -148,11 +148,20 @@ export async function initStore(): Promise<void> {
       ch.items = (ch.items as unknown as string[]).map((id) => ({ id, qty: 1 }));
     }
   }
+  // Migra profissões antigas (sem `kind`) para o novo conjunto (combate + RP).
+  const profsMigrated =
+    professions.length > 0 && professions.some((p) => !("kind" in p));
+  const migratedProfessions = profsMigrated ? PROFESSIONS : professions;
+  // Versão inicial das imagens (entidades com imagem mas sem versão).
+  const now = Date.now();
+  for (const s of scenarios) if (s.image && s.imageVer == null) s.imageVer = now;
+  for (const c of characters) if (c.picture && c.pictureVer == null) c.pictureVer = now;
+  for (const n of npcs) if (n.picture && n.pictureVer == null) n.pictureVer = now;
   cache = {
     users,
     characters,
     scenarios,
-    professions,
+    professions: migratedProfessions,
     items,
     hacks,
     disguises,
@@ -256,6 +265,21 @@ export function getGame(): GameState {
   return db().game;
 }
 
+/** Imagem completa (data URL) de uma entidade + versão, para entrega sob demanda. */
+export function getAsset(
+  kind: "scenarios" | "characters" | "npcs",
+  id: string,
+): { data: string; ver: number } | null {
+  const arr = db()[kind] as unknown as Array<Record<string, unknown>>;
+  const e = arr.find((x) => x.id === id);
+  if (!e) return null;
+  const field = kind === "scenarios" ? "image" : "picture";
+  const verField = kind === "scenarios" ? "imageVer" : "pictureVer";
+  const data = (e[field] as string) ?? "";
+  if (!data) return null;
+  return { data, ver: (e[verField] as number) ?? 0 };
+}
+
 // CRUD genérico para coleções administráveis pelo GM.
 type CrudCollection =
   | "scenarios"
@@ -269,12 +293,39 @@ type CrudCollection =
   | "music"
   | "characters";
 
+// Coleções cuja imagem (campo + versão) sai do estado e é buscada sob demanda.
+const IMAGE_FIELD: Partial<Record<CrudCollection, { field: string; ver: string }>> = {
+  scenarios: { field: "image", ver: "imageVer" },
+  characters: { field: "picture", ver: "pictureVer" },
+  npcs: { field: "picture", ver: "pictureVer" },
+};
+
 export async function upsert<T extends { id: string }>(
   name: CrudCollection,
   entity: T,
 ): Promise<void> {
   const arr = db()[name] as unknown as T[];
   const idx = arr.findIndex((e) => e.id === entity.id);
+  const img = IMAGE_FIELD[name];
+  if (img) {
+    // A imagem viaja vazia no estado; ao salvar, PRESERVA a existente quando a
+    // recebida vier vazia (editores carregam o draft já "sem imagem"), e bumpa a
+    // versão só quando a imagem realmente muda.
+    const e = entity as unknown as Record<string, unknown>;
+    const prev = (idx >= 0 ? arr[idx] : undefined) as unknown as
+      | Record<string, unknown>
+      | undefined;
+    const incoming = typeof e[img.field] === "string" ? (e[img.field] as string) : "";
+    const previous = (prev?.[img.field] as string) ?? "";
+    if (!incoming) {
+      e[img.field] = previous;
+      e[img.ver] = prev?.[img.ver] ?? (previous ? Date.now() : undefined);
+    } else if (incoming !== previous) {
+      e[img.ver] = Date.now();
+    } else {
+      e[img.ver] = prev?.[img.ver] ?? Date.now();
+    }
+  }
   if (idx >= 0) arr[idx] = entity;
   else arr.push(entity);
   await persist(name);

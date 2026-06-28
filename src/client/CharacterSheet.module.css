@@ -124,6 +124,47 @@
   flex: 1;
 }
 
+/* Mobile: a ficha preenche a moldura e a coluna de campos ROLA por dentro. */
+:global(html.mobile) .sheet {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+}
+
+:global(html.mobile) .grid {
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: 130px 1fr;
+  gap: 10px;
+}
+
+:global(html.mobile) .avatar {
+  width: 130px;
+  height: 130px;
+}
+
+:global(html.mobile) .left {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+:global(html.mobile) .fields {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Abas grudam no topo enquanto a coluna de campos rola. */
+:global(html.mobile) .tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+
 .list {
   border: 1px solid var(--green-faint);
   padding: 8px;
@@ -144,7 +185,7 @@
 
 .listHint {
   font-size: 11px;
-  color: var(--green-faint);
+  color: var(--green-dim);
 }
 
 .rows {
@@ -210,6 +251,32 @@
 
 .optName {
   font-weight: bold;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Badge de hack disponível, igual ao cadastro. */
+.tagHack,
+.tagNoHack {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  padding: 0 4px;
+  border: 1px solid;
+}
+
+.tagHack {
+  color: #000;
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.tagNoHack {
+  color: var(--green-faint);
+  border-color: var(--green-faint);
 }
 
 .optDesc {

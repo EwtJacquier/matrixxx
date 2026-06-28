@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useGame, type DamagePopup } from "./GameProvider";
 import { STATES, type ActionKind, type Token } from "@/game/types";
 import { adjacencyMods, isActionRule, objectBadge, ruleOf } from "@/game/objects";
-import { FREE_HANDS, FREE_HANDS_ID, bandLabel, inBand, resolveItem, weaponBand } from "@/game/weapons";
+import { FREE_HANDS, FREE_HANDS_ID, bandLabel, inBand, resolveItem, weaponBand, weaponTypeOf } from "@/game/weapons";
 import { canTarget } from "@/game/faction";
 import { isFlanked } from "@/game/flank";
 import { reachableCells } from "@/game/path";
@@ -29,8 +29,14 @@ function formatRemaining(ms: number): string {
 
 type Phase = "move" | "action";
 
-export function BattleView() {
-  const { state, session, emit, damagePopups, battleIntent, turnEndsAt } = useGame();
+export function BattleView({
+  spectate = false,
+}: {
+  /** modo "ver último combate": só inspeção, sem ações, sem timer.
+   * O botão de voltar vive no header (Table), não aqui. */
+  spectate?: boolean;
+} = {}) {
+  const { state, session, emit, damagePopups, battleIntent, turnEndsAt, clockOffset } = useGame();
   const battle = state?.game.battle ?? null;
   const isGM = session?.role === "gm";
   const mobile = useMobile();
@@ -54,7 +60,9 @@ export function BattleView() {
   );
 
   // Jogador controla só o próprio token; GM controla só inimigos/monstros.
+  // No modo espectador (ver último combate), ninguém controla nada.
   const controlsActor =
+    !spectate &&
     !!currentActor &&
     (currentActor.kind === "player"
       ? myCharIds.has(currentActor.characterId ?? "")
@@ -132,7 +140,7 @@ export function BattleView() {
     setReloadWeaponId("");
     setMoveCharges(0);
     setAttackCharges(0);
-    setNav("root");
+    setNav(spectate ? "inspect" : "root");
     setMenuIndex(0);
     endedRef.current = false;
     // Ao iniciar/trocar o turno, reseta o inspetor.
@@ -230,8 +238,10 @@ export function BattleView() {
   const effectiveWeaponId = myWeapons.some((w) => w.id === weaponId) ? weaponId : "";
   const selectedWeapon = state.items.find((i) => i.id === effectiveWeaponId) ?? null;
   const weaponRangeBand = weaponBand(selectedWeapon);
-  // Distorção no ATAQUE: armas aceitam só +1 carga; Mãos Livres (id vazio) é liberado.
-  const attackChargeMax = effectiveWeaponId ? 1 : availableCharges;
+  // Distorção no ATAQUE: corpo a corpo (inclui mãos livres) é liberado; arma de
+  // fogo aceita só +1 carga.
+  const attackChargeMax =
+    weaponTypeOf(selectedWeapon) === "firearm" ? 1 : availableCharges;
   // Distorção de ataque só fica disponível APÓS escolher a arma (alvo/confirmação),
   // não durante a seleção de arma.
   const inAttackFlow = nav === "target" || nav === "confirmAttack";
@@ -465,8 +475,11 @@ export function BattleView() {
 
   function confirmAction() {
     if (!currentActor) return;
-    // A ação resolve a partir da casa encenada (fromPos) SEM mover o token; o
-    // movimento é confirmado à parte (e continua reversível até encerrar o turno).
+    // Se o ator saiu da casa inicial (hasMoved), o movimento + o encerramento do
+    // turno são confirmados JUNTO da ação, no MESMO evento — atômico no servidor.
+    // Isso evita a corrida entre player:confirmAction / moveToken / endTurn (que
+    // deixava o turno "voltar" ao ator e liberava movimento de novo).
+    const willEnd = hasMoved;
     emit("player:confirmAction", {
       tokenId: currentActor.id,
       kind: actionKind,
@@ -478,11 +491,12 @@ export function BattleView() {
       // recarga: tanto via item de munição (useItem) quanto via objeto de recarga (special)
       reloadWeaponId: reloadWeaponId || undefined,
       attackCharges,
+      // Movimento encenado a confirmar + encerrar turno (só se realmente moveu).
+      commitPos: willEnd && stagedPos ? stagedPos : undefined,
+      moveCharges: willEnd ? moveCharges : undefined,
+      endTurn: willEnd,
     });
-    // Só encerra automático se o ator REALMENTE saiu da casa inicial (posição
-    // encenada != posição de início). Se voltou para a casa de origem, hasMoved é
-    // falso e ele pode continuar se movimentando após atacar.
-    if (hasMoved) endTurn();
+    if (willEnd) endedRef.current = true;
   }
 
   // --- Menu de comando estilo FFT (árvore navegável) ---
@@ -800,6 +814,18 @@ export function BattleView() {
 
   const inputRef = useRef<(a: InputAction) => void>(() => {});
   inputRef.current = (a) => {
+    // Espectador: só navega o cursor de inspeção (sem ações).
+    if (spectate) {
+      if (a === "confirm" || a === "cancel" || a === "distMinus" || a === "distPlus") return;
+      const clamp = (v: number) => Math.max(0, Math.min(grid - 1, v));
+      const nx = clamp(cursor.x + (a === "right" ? 1 : a === "left" ? -1 : 0));
+      const ny = clamp(cursor.y + (a === "down" ? 1 : a === "up" ? -1 : 0));
+      if (nx !== cursor.x || ny !== cursor.y) {
+        setCursor({ x: nx, y: ny });
+        playSfx("move");
+      }
+      return;
+    }
     if (!controlsActor) return;
     // L1/R1 ajustam a distorção em qualquer contexto (movimento ou ataque).
     if (a === "distMinus") { playSfx("distortion"); return adjustDist(-1); }
@@ -1003,14 +1029,17 @@ export function BattleView() {
     <div className={`${styles.layout} ${mobile ? styles.layoutMobile : ""}`}>
       <section className={styles.arena}>
         <div className={styles.topBar}>
-          {endsAt > 0 && (
+          {spectate && <span className={styles.dist}>último combate</span>}
+          {/* Sem timer no modo espectador. */}
+          {!spectate && endsAt > 0 && (
             <span
-              className={`${styles.timer} ${endsAt - now < 10000 ? styles.timerLow : ""}`}
+              className={`${styles.timer} ${
+                endsAt - (now + clockOffset) < 10000 ? styles.timerLow : ""
+              }`}
             >
-              ⏱ {formatRemaining(endsAt - now)}
+              ⏱ {formatRemaining(endsAt - (now + clockOffset))}
             </span>
           )}
-          <span className={styles.dist}>distorção {state.game.distortion}/10</span>
           <button
             type="button"
             className={styles.camReset}
@@ -1129,15 +1158,15 @@ export function BattleView() {
                   isCursor ? styles.cursor : "",
                 ].join(" ")}
                 onClick={
-                  mobile
-                    ? undefined // mobile: o board só faz pan/zoom por toque
+                  mobile && !spectate
+                    ? undefined // mobile (em jogo): o board só faz pan/zoom por toque
                     : () => {
                         if (nav === "inspect") {
                           if (cursor.x !== x || cursor.y !== y) {
                             setCursor({ x, y });
                             playSfx("move");
                           }
-                        } else clickCell(x, y);
+                        } else if (!spectate) clickCell(x, y);
                       }
                 }
               >
@@ -1150,8 +1179,9 @@ export function BattleView() {
                     damage={damagePopups.find((d) => d.tokenId === tok.id)}
                     flanked={flankedIds.has(tok.id)}
                     onInspect={
-                      // Mobile não tem inspeção por enquanto (board é só pan/zoom).
-                      mobile
+                      // Mobile em jogo não inspeciona (board é só pan/zoom); no
+                      // espectador, a inspeção é liberada.
+                      mobile && !spectate
                         ? undefined
                         : // Todos podem inspecionar clicando — exceto a própria casa do
                           // ator durante o movimento (lá o clique serve para mover).
@@ -1410,7 +1440,7 @@ export function BattleView() {
           >
             Histórico
           </button>
-          {isGM && (
+          {isGM && !spectate && (
             <span className={styles.logActions}>
               <button className={styles.logLink} onClick={() => emit("gm:advanceTurn", { dir: -1 })}>
                 ◀
@@ -1455,8 +1485,8 @@ export function BattleView() {
       </div>
       )}
 
-      {/* Inferior-esquerdo: inspetor — oculto no mobile. */}
-      {!mobile && inspectShown && (
+      {/* Inferior-esquerdo: inspetor — oculto no mobile (exceto espectador). */}
+      {(spectate || !mobile) && inspectShown && (
         <div className={styles.inspectPanel}>
           <TokenInspector
             token={inspectShown}
@@ -1464,7 +1494,7 @@ export function BattleView() {
             showHp={isGM}
             onClose={inspected ? () => setInspectId(null) : undefined}
             onEdit={
-              isGM
+              isGM && !spectate
                 ? (patch) => emit("gm:editToken", { tokenId: inspectShown.id, ...patch })
                 : undefined
             }
@@ -1472,8 +1502,8 @@ export function BattleView() {
         </div>
       )}
 
-      {/* Direcional na tela (mobile) — só durante a movimentação do token. */}
-      {mobile && controlsActor && nav === "move" && (
+      {/* Direcional na tela (mobile): na movimentação do token e na inspeção. */}
+      {mobile && (nav === "inspect" || (controlsActor && nav === "move")) && (
         <TouchControls onInput={(a) => inputRef.current(a)} />
       )}
     </div>
